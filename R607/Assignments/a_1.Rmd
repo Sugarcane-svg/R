@@ -1,0 +1,61 @@
+---
+title: "a_1"
+author: "Jie Zou"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(dplyr)
+```
+
+#Intro:
+This is a study of alcohol consumption over the world, where the alcohol are divided into three main groups: wine, beer and spirit. The unit of measurement is the servings consumed per person with standard serving size, which is glasses for wine, cans for beer and shots for spirits.
+
+article from https://fivethirtyeight.com/features/dear-mona-followup-where-do-people-drink-the-most-beer-wine-and-spirits/
+
+
+#load the data source: alcohol_consumption_2010
+```{r}
+alcohol<-read.csv("https://raw.githubusercontent.com/fivethirtyeight/data/master/alcohol-consumption/drinks.csv")
+```
+
+#total number of three alcohol categories
+```{r}
+beer_total <- alcohol %>% summarize(sum(beer_servings))
+wine_total <- alcohol %>% summarize(sum(wine_servings))
+spirit_total <- alcohol %>% summarize(sum(spirit_servings))
+num_nonalcohol_country<-sum(alcohol$total_litres_of_pure_alcohol==0) #13
+```
+
+#Extract top 10 of each alcohol category
+```{r}
+top_10_beer<-data.frame(country = alcohol$country, beer = alcohol$beer_servings)
+top_10_beer<-head(top_10_beer %>% arrange(desc(beer)),10)
+
+top_10_wine<-data.frame(country = alcohol$country, wine = alcohol$wine_servings)
+top_10_wine<-head(top_10_wine %>% arrange(desc(wine)),10)
+
+
+top_10_spirit<-data.frame(country = alcohol$country, spirit = alcohol$spirit_servings)
+top_10_spirit<-head(top_10_spirit %>% arrange(desc(spirit)),10)
+```
+
+#sum up the top 10 of each alcohol
+```{r}
+sum_beer <- sum(top_10_beer$beer)
+sum_Wine <- sum(top_10_wine$wine)
+sum_Spirit <- sum(top_10_spirit$spirit)
+```
+
+#ratio of each top 10 alcohol consumer
+```{r}
+beer_ratio <- sum_beer / beer_total
+wine_ratio <- sum_Wine / wine_total
+spirit_ratio <- sum_Spirit / spirit_total
+
+top10_ratio<-data.frame(beer_ratio, wine_ratio, spirit_ratio)
+```
+
+#conclusions:
+the statistic does help people to confirm some stereotype such as France consume more wine than other countries. However, there are total 13 countries not having any alcoholic drink, that is because they are predominated by Muslin. Through brief calculation, the total number of beer consumed was 20489, the total number of wine consumed was 9544 and spirit consumed was 15643. According to the result of "Top 10 countries by servings consumed per person, 2010", top 10 beer consumers take up 16.23%  over the world, top 10 wine consumers take up 29.85% and top 10 spirit consumers take up 20.29%. Therefore, wine business made more profit compared to others in the period.
