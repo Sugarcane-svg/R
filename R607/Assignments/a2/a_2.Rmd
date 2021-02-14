@@ -1,0 +1,57 @@
+---
+title: "a_2"
+author: "Jie Zou"
+date: "2/13/2021"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# connect postgres and make queries
+
+1. we need to install packages to work on connection, note that RPostgreSQL package is not working in my current version of R, therefore, RPostgres will be the alternative way.
+
+```{r}
+install.packages("RPostgre")
+```
+
+2. use two libraries under this package 
+
+```{r}
+library(DBI)
+library(RPostgres)
+```
+
+3. connect with the database created in Postgres server and list out all the tables under this DB
+
+```{r}
+con<-dbConnect(RPostgres::Postgres(), dbname="top_10_movies_survey")
+dbListTables(con)
+```
+
+4. make a query to present the table
+
+```{r}
+tb = dbGetQuery(con, "select * from moviesurvey")
+tb
+dbGetQuery(con, "select * from moviesurvey where the_queens_gambit = 5")
+
+```
+
+5. if you would like to work on database locally, you can create data frame based on the table
+
+```{r}
+movie_survey <- as.data.frame(tb)
+View(movie_survey)
+```
+
+
+
+
+
+
+
+
+
