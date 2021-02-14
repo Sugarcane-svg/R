@@ -18,3 +18,15 @@ This assignment will be splited into two parts. The first part is about database
 *For the first part(**database_setup.txt**): I don't have Postgres GUI installed, instead, I have installed PostgreSQL from home-brew, therefore, the code should be run in the terminal
 
 *For the second part(**a_2.Rmd**): it runs in RStudio
+
+
+# data description
+
+0 - no opinion/never watch
+1 - poor
+2 - fair
+3 - average
+4 - good
+5 - Excellent
+
+column avg_hr = averge hour spend in watching movies per week
