@@ -23,10 +23,15 @@ This assignment will be splited into two parts. The first part is about database
 # data description
 
 0 - no opinion/never watch
+
 1 - poor
+
 2 - fair
+
 3 - average
+
 4 - good
+
 5 - Excellent
 
 column avg_hr = averge hour spend in watching movies per week
