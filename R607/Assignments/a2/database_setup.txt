@@ -1,0 +1,43 @@
+# create database
+    
+    createdb top_10_movies_survey
+   
+1st approach: use pg_restore to restore csv file (Failed)
+
+    pg_restore --dbname=top_10_movies_survey --verbose moviedata.csv
+
+it is not working even though when I 'cd' into the directory with the csv file. Therefore, I do some researches, and find an alternative way, where I can copy the content of file into database.
+
+2nd approach:
+
+    1. log into the target database
+        psql top_10_movies_survey
+        
+    2. create a table under current database
+        CREATE TABLE moviesurvey (
+        the_queen_gambit integer,
+        emily_in_paris integer,
+        lucifer integer,
+        the_umbrella_academy integer,
+        money_heist integer,
+        dark_desire integer,
+        friends integer,
+        the_crown integer,
+        ratched integer,
+        dark integer,
+        like_genres varchar(255),
+        dislike_genres varchar(255),
+        avg_hr numeric(5),
+        recommend_movies varchar(255)
+        );
+        
+    3. copy the file content
+        \COPY movieSurvey FROM 'moviedata.csv' delimiter ',' csv header;
+        
+    4. to make sure that the table is there and with data inside
+        \dt
+        select * from moviesurvey
+
+
+finish the database_setup
+    
