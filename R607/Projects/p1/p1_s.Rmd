@@ -1,0 +1,171 @@
+---
+title: "Project 1: Chess tournament cross-tables"
+author: "Jie Zou"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse)
+library(stringr)
+```
+
+## Main Data Processing
+
+#### Read txt file
+
+$warn = FALSE$: don't show the warnings while reading the file
+```{r}
+file<-readLines("tournamentinfo.txt", warn = FALSE)
+head(file)
+```
+
+
+
+#### Data Re-organizing
+
+as we can see that the file has lots of useless dashes, and we don't care about the titles. Therefore, we are going to read the file by lines. To do so, we get the **sequence of lines** that we need(e.g. line 5, 6, 8, 9, 11, 12, etc). 
+
+```{r}
+line1 <- c(seq(5, length(file), by = 3))
+line2 <- c(seq(6, length(file), by = 3))
+head(line1)
+head(line2)
+```
+
+split each data entry into two lines, **line1** will contains *[pair num], [player name], [total]* and [rounds], where **line2** will contains *[state], [USCF ID / Rtg (pre->post)], [letter result]*
+```{r}
+head(file[line1])
+```
+
+```{r}
+head(file[line2])
+```
+
+
+
+#### Data Extracting
+
+we extract the name from line1 we've read
+
+([|]).*?\\1: "|" follow by any characters or spaces and finish with "|"
+```{r}
+name <- str_extract(file[line1], "([|]).*?\\1")
+head(name)
+```
+
+we can see that the extracted data has "|" which we don't need. So, I **replace "|" with ""**
+```{r}
+name<-str_replace_all(name, "[|]", "")
+head(name)
+```
+
+After that, the data still contains extra spaces in both beginning and the end of strings. For the sake of aesthetics, I **remove the spaces** from two sides. (Well, that is totally fine if you don't want to bother with spaces)
+```{r}
+name<-str_trim(name)
+head(name)
+```
+
+
+The same procedure is used to extracting **state**, **total points** and **pre-ratings**
+```{r}
+state<-str_trim(str_replace_all(str_extract(file[line2], ".{3}[|]"), "[|]", ""))
+head(state)
+```
+```{r}
+total_pts<-str_extract(file[line1], "\\d+\\.\\d+")
+head(total_pts)
+```
+
+```{r}
+pre_rating <- str_trim(str_replace_all(str_extract(file[line2], ":.\\d*.+?[-]"), ":|[-]|P\\d+", ""))
+head(pre_rating)
+```
+
+
+#### Date Reformation
+
+create the data frame from the data we just extracted above
+```{r}
+tournament<-data.frame(name, state, total_pts, pre_rating)
+```
+
+
+## Sub-data Processing
+
+#### The purpose of sub data
+
+In my opinion, to calculate the average pre chess rating of opponents, it is easier to bind the pair num of player and pair num of opponents. (if you are not sure what I am talking about, here is my approach)
+
+#### Approach
+
+(1). **extract all numeric number** in line1
+```{r}
+rounds<-str_extract_all(file[line1], "\\d+")
+r = rounds # make a copy
+head(r)
+```
+
+
+(2). we know that the first three numeric numbers represent [pair num] and [total points], and there is no need to use these here, because all I care about is the pair number of opponents. I **eliminate unnecessary numbers and create a new data frame**
+```{r}
+r1<- data.frame()
+for(i in r){
+  a<-i[4]
+  b<-i[5]
+  c<-i[6]
+  d<-i[7]
+  e<-i[8]
+  f<-i[9]
+  g<-i[10]
+  r1<-rbind(r1, c(a,b,c,d,e,f,g))
+}
+names(r1)<-c("1","2","3","4","5","6","7")
+head(r1)
+```
+
+(3). Now, we know that each cell correspond to an opponent, each row is corresponding to the opponents whose player play against with. Therefore,
+
+**i.** we loop through the whole dataset, and find the pre_ratings are associated with individual opponents with the same pair num. 
+
+**ii.** set up a counter to count the number of opponents that player has played against with.
+
+**iii.** I sum them up, take the mean(sum/count) and round them to whole number
+
+**iv.** store the data into variable 
+
+```{r}
+avg_pre_rating<-NULL
+
+for( i in 1:nrow(r1)){
+  count<-0
+  total<-0
+  for (j in 1:ncol(r1)){
+    temp <- r1[i, j]
+    if(!is.na(temp)){
+      total<-total+as.integer(tournament$pre_rating[as.integer(temp)])
+      count<-count+1
+    }
+  }
+  avg_pre_rating<-c(avg_pre_rating, round(total/count, 0))
+}
+
+avg_pre_rating
+```
+
+
+## Data Merging
+
+merge the sub data which we just calculated into the main data set
+```{r}
+tournament<-tournament%>%mutate(avg_pre_rating = avg_pre_rating)
+
+```
+
+
+## Export Data
+```{r}
+write.csv(tournament, "p1_chess.csv", row.names = FALSE)
+```
+
