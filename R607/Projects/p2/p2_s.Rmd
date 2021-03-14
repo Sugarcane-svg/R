@@ -1,0 +1,355 @@
+---
+title: "p2: Tidy and Transform Three data set"
+author: "Jie Zou"
+date: "`r Sys.Date()`"
+output:
+  prettydoc::html_pretty:
+    theme: architect
+    highlight: github
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(dplyr)
+library(tidyr)
+library(tidyverse)
+library(knitr)
+```
+
+## Case I: covid_data.csv
+
+**Intro: The status of different cases of COVID-19**
+
+### Read the file
+
+```{r}
+covid <- read.csv("https://raw.githubusercontent.com/Sugarcane-svg/R/main/R607/Projects/p2/p2_covid_data.csv")
+head(covid, 8)
+```
+
+### Tidy covid data
+
+#### 1. remove some rows 
+the top 8 rows are showing data grouped by continents, however, here, we care more about the cases in different countries. Therefore, I am going to remove the first eight rows.
+```{r}
+covid <- covid[-c(0:8),]
+head(covid)
+```
+
+#### 2. remove some columns
+from the table, there are many columns that contains most of *NA*, therefore, we aren't going to use these variables to do analyze. Otherwise, it will cause lost of skewness.
+```{r}
+covid <- covid %>% 
+  select("sl_no","country","total_cases","total_deaths", "total_recovered", "serious_critical_cases", "total_tests")
+covid <- covid %>% drop_na()
+```
+
+
+### Perform analysis
+lets take a overlook of the data, there are 7 variables and total 187 observations of cases in different countries.
+```{r}
+glimpse(covid)
+```
+
+
+#### 1. how is the death cases in the top 10 listed in *sl_no*?
+
+from the ratio of deaths, UK seems have high death rate followed by Mexico
+```{r}
+top_10 <- covid %>%
+  filter(sl_no <= 10)%>%
+  select(country, total_cases, total_deaths)%>%
+  mutate(ratio_of_deaths = total_deaths/total_cases)
+
+ggplot(top_10, aes(x = country, y = ratio_of_deaths)) + geom_bar(stat = "identity") + labs(title = "the ratio of death in 10 countries")
+```
+
+#### 2. how does test cases contribute to total cases?
+
+as we can see that the average test cases all over countries is roughly 94 cases, the average total cases is 91908 each country. If we assume that all test cases were positive and every country have average total cases, it means that there were only in average 0.1% of population contribute to total cases, in other words, no people would like to do the test. And there are only 47 out of 187 countries have the test cases above average.
+```{r}
+# the average of test cases all over the countries
+avg_test<-sum(covid$total_tests)/nrow(covid)
+avg_test
+
+# the average of total cases all over the countries
+avg_total<-sum(covid$total_cases)/nrow(covid)
+avg_total
+
+# the average ratio of test case
+avg_ratio<- avg_test / avg_total
+avg_ratio
+# number of countries whose test case is above average ratio
+num_country <- covid %>% 
+  filter(total_tests>avg_test) %>%
+  count(country) %>%
+  summarise(sum(n))
+num_country
+```
+
+#### 3. what is the ratio of test cases contribute to their own country of total cases?
+
+here, each country remains its own ratio of total test cases, where Montserrat has the highest population who is willing to do a covid test. The test rate here is 18%. It is much higher than the one we calculate before.
+```{r}
+ratio_test<- covid %>% 
+  select(country) %>%
+  mutate(test_rate = covid$total_tests/covid$total_cases)
+
+ggplot(ratio_test, aes(x=country, y = test_rate)) + geom_bar(stat = "identity")
+
+# top test rate
+ratio_test %>% filter(test_rate == max(test_rate))
+
+# avg test rate contributed by each country 
+sum(ratio_test$test_rate)/187
+```
+
+### Conclusion
+to do a test is encouraged, in that way we can see better the pandemic situation, we can have a better prediction in the positive test population. Even though there are many deaths cases, the ratio of deaths is still relatively low. Don't be scary. 
+
+
+
+## Case II: vaccin_data.csv
+
+**Intro: covid vaccine injection situation**
+
+### Read the file
+
+```{r}
+vaccine <- read.csv("https://raw.githubusercontent.com/Sugarcane-svg/R/main/R607/Projects/p2/p2_vaccin_data.csv")
+```
+
+### Tidy and transfrom data
+**Overview of data**: there are 15 variables and nearly 6k observations. the data is big.  
+```{r}
+glimpse(vaccine)
+```
+
+take a look at the first 10 rows, we observe that country and iso code remain the same, but the date is increment by one. Therefore, we can compress data
+```{r}
+head(vaccine, 10)
+```
+
+
+#### 1. drop some columns
+There are many variables which cannot perform analysis later or are not so useful. For these variables, we are going to drop them to make data smaller. For example, *[total_vaccinations_per_hundred]*, *[people_vaccinated_per_hundred]*, *[people_fully_vaccinated_per_hundred]*, *[daily_vaccinations_per_million]*, *[source_name]*, *[source_website]*, *[iso_code]*, *[daily_vaccinations_raw]*, *[vaccines]*. After dropping columns, there are still 6k observations 
+```{r}
+vaccine <- vaccine %>% 
+  select(-c(total_vaccinations_per_hundred,
+            people_vaccinated_per_hundred,
+            people_fully_vaccinated_per_hundred,
+            daily_vaccinations_per_million,
+            source_name,
+            source_website,
+            iso_code,daily_vaccinations_raw,
+            vaccines))
+
+#columns left
+colnames(vaccine)
+```
+
+#### 2. group data by its country
+take a close look at variable date, all observations for each country starts from different date and ends differently. In case we don't miss any observation which would affect the number of vaccines, instead of dropping *NA* value, we group by them by its country.
+
+> approaches
+
+* split data into tables with primary key(country) and foreign key
+```{r message=FALSE, warning=FALSE}
+# num of days
+days <- vaccine %>% 
+  group_by(country)%>%
+  count(date) %>%
+  summarize(num_of_days = sum(n))
+
+# num of total vaccination
+total_vaccine<-vaccine%>%
+  group_by(country)%>%
+  summarise(total_vaccine=max(total_vaccinations, na.rm = TRUE))
+
+# num of people who vaccinated
+people_vaccinated <- vaccine%>%
+  group_by(country)%>%
+  summarise(people_vaccinated= 
+              if(max(people_vaccinated, na.rm = TRUE)==-Inf) 0 else max(people_vaccinated, na.rm = TRUE))
+
+# num of people who got fully vaccinated
+people_full_vacc<-vaccine%>%
+  group_by(country)%>%
+  summarise(people_full_vacc= 
+              if(max(people_fully_vaccinated, na.rm = TRUE)==-Inf) 0 else max(people_fully_vaccinated, na.rm = TRUE))
+
+
+```
+* join these tables by primary key(country)
+```{r}
+df <- days
+df<-left_join(df, total_vaccine, by = "country")
+df<-left_join(df, people_vaccinated, by = "country")
+df<-left_join(df, people_full_vacc, by = "country")
+head(df)
+```
+
+
+### Perform analysis
+
+#### 1. How many vaccines do each country get each day? and which country gets the most and the least vaccinations each day?
+
+from avg_vacc table, we can see the average vaccination situation of each country. Meanwhile, the most vaccinated country is the United States, and the least vaccinated country is Montserrat
+
+```{r}
+avg_vacc <- df %>% 
+  select(country, num_of_days, total_vaccine)%>%
+  mutate(avg_vacc = round(total_vaccine/num_of_days,0))
+avg_vacc
+
+# the most vaccinated country
+avg_vacc %>% filter(avg_vacc == max(avg_vacc))
+
+# the least vaccinated country
+avg_vacc %>% filter(avg_vacc == min(avg_vacc))
+```
+
+#### 2. What is the future demand for vaccines in the top five countries in terms of total vaccine doses?
+
+> approches
+
+* the top 5 countries are United States, China, India, United Kingdom, England.
+```{r}
+df %>% 
+  select(country, total_vaccine)%>%
+  arrange(desc(total_vaccine))
+```
+
+* select these 5 countries in vaccine table and create a new data set
+
+the graph of China, England and United Kingdom show that the demand towards stability, however, the graph of India and United States seem still upward trend. So I assume that the demand for vaccines will continue to increase in these two countries
+```{r}
+top_5 <- vaccine %>% 
+  select(country,date,daily_vaccinations) %>%
+  filter(country == "United States" | 
+           country =="China" | 
+           country == "India" | 
+           country == "United Kingdom" | 
+           country =="England")
+
+ggplot(top_5, aes(x = date, y = daily_vaccinations)) + geom_histogram(stat = "identity")+ facet_wrap(~ country)
+```
+
+
+## Case III: gdp_data.csv
+
+**Intro: The GDP of top 10 countries in the past ten years** 
+
+### Read file
+
+```{r}
+gdp <- read.csv("https://raw.githubusercontent.com/Sugarcane-svg/R/main/R607/Projects/p2/p2_gdp_data.csv")
+```
+
+
+### Tidy and transform data
+
+#### 1. summary of data
+
+compare to previous data set, this data has much more variables and much less observations.
+```{r}
+glimpse(gdp)
+```
+
+#### 2. drop columns 
+
+we are going to see the status of GDP in the past ten years. So, we need to drop some unnecessary columns. For example, 
+[Country.Code], I am not familiar with country code :(. 
+[Indicator.Name] & [Indicator.Code], no calculated values. [X1960 : X2009], beyond the analysis.
+```{r}
+gdp <- gdp %>% select(-c(2:54))
+colnames(gdp)
+```
+
+#### 3. drop rows 
+there are some countries that don't have data of gdp in the past ten years. We only care about the countries with gdp growth, so it no need to keep these countries in side the data set.
+```{r}
+gdp <- gdp %>% drop_na()
+head(gdp)
+```
+
+
+#### 4. transfrom data
+
+Even through the data set looks cleaner than before, it is still hard for us to plot or analyze it, as a result, I am going to transform data into 
+[country name]: character
+[years]: numeric
+[gdp]: numeric
+```{r}
+df.long <- pivot_longer(gdp, cols=2:11, names_to = "years", values_to = "gdp")
+head(df.long)
+```
+
+### Perform analysis
+
+
+#### 1. what is the mean and median of each countries' GDP?
+```{r}
+summary_df<-df.long %>% 
+  group_by(Country.Name)%>%
+  summarize(mean = mean(gdp), median = median(gdp))
+head(summary_df)
+```
+#### 2. how many countries have negative gdp growth?
+```{r}
+summary_df %>% 
+  filter(mean<0)%>%
+  count(Country.Name)%>%
+  summarize(number_of_country_have_negative_GDP = sum(n))
+```
+#### 3. which country has highest GDP growth in 2019?
+
+that surprise me, the country which has the highest GDP growth in 2019 is Timor-Leste. the gdp of this country in 2018 is -1.1, and gdp of 2019 is 18.7. 
+```{r}
+growth18 <- df.long%>%
+  filter(years == "X2018")%>%
+  select(Country.Name, gdp)
+
+
+growth19 <-df.long%>%
+  filter(years == "X2019")%>%
+  select(Country.Name, gdp)
+
+highest19<-left_join(growth18, growth19, by = "Country.Name")
+
+highest19 <- highest19 %>% 
+  mutate(growth = (gdp.y - gdp.x))
+
+highest19 %>% filter(growth == max(growth))
+```
+
+let's take la close look at the graph, Timor-Leste's GDP had been going down from 2010 to 2018. However, before 2016, the growth is showing positive which means that it still make some profits. from 2016 to 2018, the GDP broke the freezing point. That must be something serious happpen.
+```{r}
+tl<-df.long%>%filter(Country.Name == "Timor-Leste")
+
+ggplot(tl, aes(x = years, y = gdp)) + geom_bar(stat = "identity")
+```
+
+#### 4. what about countries with GDP growth like Timor-Leste?
+
+Countries that are not major economies have increased their GDP by at least 1 percentage point between 2018 and 2019, surprisingly, basically no countries in the global economy have appeared.
+```{r}
+greater1<-highest19 %>% filter(growth >1)
+ggplot(greater1, aes(x = Country.Name, y = growth, fill = Country.Name)) + geom_bar(stat = "identity") + coord_flip()
+```
+
+
+#### 5. What about countries like United States, China, Japan, Germany and France? (just list some countries' names on the top of my head now)
+
+The graph of China has similar trends to those mentioned above, the percentage of GDP has declined slightly since 2018. The plot of the United States is very close to uniform distribution, that the economy of this country is very stable.
+```{r}
+listed_countries <- df.long %>% 
+  filter(Country.Name == "United States" | 
+           Country.Name == "China" | 
+           Country.Name == "Japan" |
+           Country.Name == "Germany" |
+           Country.Name == "France")
+
+ggplot(listed_countries, aes(x = years, y = gdp)) + geom_bar(stat = "identity") + facet_wrap(~Country.Name)
+```
+
