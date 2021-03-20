@@ -1,23 +1,24 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<movie>
-    <title>Resident Evil: The Final Chapter</title>
-    <director>Paul W. S. Anderson</director>
-    <distributor>Sony Pictures</distributor>
-    <release>1/27/2017</release>
-    <duration>107</duration>
-</movie>
-<movie>
-    <title>The Kissing Booth</title>
-    <director>Paul W. S. Anderson</director>
-    <distributor>Sony Pictures</distributor>
-    <release>1/27/2017</release>
-    <duration>110</duration>
-</movie>
-<movie>
-    <title>Resident Evil: The Final Chapter</title>
-    <director>Paul W. S. Anderson</director>
-    <distributor>Sony Pictures</distributor>
-    <release>1/27/2017</release>
-    <duration>110</duration>
-</movie>
-
+<movies>
+    <movie>
+        <title>Resident Evil: The Final Chapter</title>
+        <director>Paul W. S. Anderson</director>
+        <distributor>Sony Pictures</distributor>
+        <release>1/27/2017</release>
+        <duration>107</duration>
+    </movie>
+    <movie>
+        <title>The Kissing Booth</title>
+        <director>Paul W. S. Anderson</director>
+        <distributor>Sony Pictures</distributor>
+        <release>1/27/2017</release>
+        <duration>110</duration>
+    </movie>
+    <movie>
+        <title>Resident Evil: The Final Chapter</title>
+        <director>Paul W. S. Anderson</director>
+        <distributor>Sony Pictures</distributor>
+        <release>1/27/2017</release>
+        <duration>110</duration>
+    </movie>
+</movies>
