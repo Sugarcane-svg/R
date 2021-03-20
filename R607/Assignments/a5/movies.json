@@ -1,0 +1,36 @@
+{
+    "movie1": {
+        "title": "Resident Evil: The Final Chapter",
+        "director": [
+            "Paul W. S. Anderson"
+        ],
+        "distributor": [
+            "Sony Pictures"
+        ],
+        "release": "1/27/2017",
+        "duration": 107
+    },
+    "movie2": {
+        "title": "The Kissing Booth",
+        "director": [
+            "Vince Marcello"
+        ],
+        "distributor": [
+            "Netflix"
+        ],
+        "release": "5/11/2018",
+        "duration": 110
+    },
+    "movie3": {
+        "title": "Jiang Ziya",
+        "director": [
+            "Cheng Teng",
+            "Li Wei"
+        ],
+        "distributor": [
+            "Beijing Enlight Pictures"
+        ],
+        "release": "5/11/2018",
+        "duration": 110
+    }
+}
