@@ -1,12 +1,12 @@
 # Target: read .xml, .html and .json file into RStudio
 
-#### Technique skills
+#### Packages
 
-  * tidyverse
-  * RCurl
-  * XML
-  * rjson
-  * DT
+  * tidyverse -> pipe line function
+  * RCurl -> secure in download web contents
+  * XML -> read xml file and html file
+  * rjson -> read json file
+  * DT -> display data frame
 
 #### Description
   
