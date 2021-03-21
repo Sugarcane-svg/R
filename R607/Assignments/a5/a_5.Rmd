@@ -1,0 +1,119 @@
+---
+title: "a_5: Working with XML and JSON in R"
+author: "Jie Zou"
+date: "`r Sys.Date()`"
+output:
+  prettydoc::html_pretty:
+    theme: architect
+    highlight: github
+vignette: >
+  %\VignetteIndexEntry{Vignette Title}
+  %\VignetteEngine{knitr::rmarkdown}
+  %\VignetteEncoding{UTF-8}
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse)
+library(XML)
+library(RCurl)
+library(rjson)
+library(DT)
+```
+
+### Read .xml file
+
+```{r}
+# store url
+url <- "https://raw.githubusercontent.com/Sugarcane-svg/R/main/R607/Assignments/a5/movies.xml"
+
+# get url
+my_url<-getURL(url = url)
+
+# get the content of this page
+xml.parse <- xmlParse(my_url)
+
+# parse data
+xml.root <- xmlRoot(xml.parse)
+
+# make data frame
+xml.df <- xmlToDataFrame(xml.root)
+
+# print data in a table
+datatable(xml.df)
+```
+
+### Read .html file
+
+I was tring to do the same like reading .xml file, and I figured that there is a better function that takes care of everything in html as long as reading tables from it. all you need to do is to specify which table from the webpage you want to read
+
+*//th/ancestor::table* means find <th> tag under <table>, you can specify the text in the first cell by doing *//th[text() = 'XXX']/ancestor::table*. 
+
+I only get one table in the webpage, for simplicity reason, I don't need to specify which table to read in. however, I could do *//th[text() = 'title']/ancestor::table* instead. It will give the same ouput
+```{r}
+library(htmltab)
+#store url
+url <- "https://raw.githubusercontent.com/Sugarcane-svg/R/main/R607/Assignments/a5/movies.html"
+
+#  means find table label from th tag
+html.tb <- htmltab(url, which = "//th/ancestor::table") 
+
+# print result
+datatable(html.tb)
+```
+
+
+### Read .json file
+
+in my json file, there are three objects: movie1, movie2 and movie3. Each of them have the same column names. m3 has two directors, rbind function can only be used to bind data with same length, but m3 has length of 2 instead of 1, therefore, I cannot use rbine directly.
+
+```{r}
+# store url
+url <- "https://raw.githubusercontent.com/Sugarcane-svg/R/main/R607/Assignments/a5/movies.json"
+
+# read .json
+json.file <- fromJSON(getURL(url))
+
+# create a instance of data frame
+json.df <- data.frame()
+
+# bind each of them 
+json.df <- rbind(json.df,json.file$movie1)
+json.df <- rbind(json.df,json.file$movie2)
+
+# make m3 as individual data frame with two observations
+m3 <- as.data.frame(json.file$movie3)
+datatable(m3)
+```
+From the table above, we can see that only director is is different, everything else remains the same, So I decide to bind data frame m3 first, change the value of director finally remove the unnecessary rows
+```{r}
+# bind m3 into json.df
+json.df <- rbind(json.df, m3)
+
+# concate director with the same title
+json.df[3,2] <- m3 %>%
+  filter(title=="Jiang Ziya")%>%
+  summarize(paste(director, collapse = ", "))
+
+# remove the last row
+json.df <- json.df[-4, ]
+
+datatable(json.df)
+```
+
+### Compare if these three data frame are identical from each other
+```{r}
+# json vs. xml
+identical(xml.df, json.df)
+
+# json vs. html
+identical(html.tb, json.df)
+
+# xml vs html
+identical(html.tb, xml.df)
+```
+
+
+### Conclusion
+
+They are not identical from each other, So the three data frames are the same even though they are extracted from differnt web formats.
