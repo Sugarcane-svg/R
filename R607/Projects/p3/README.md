@@ -17,7 +17,7 @@
 ### Job splitting
 
   1. Pull in the data from website (by Joshua)
-  2. Tidy data (by Euclides)
+  2. Tidy data [#Project3_Progress_210325.csv](https://raw.githubusercontent.com/Sugarcane-svg/R/main/R607/Projects/p3/Project3_Progress_210325.csv)(by Euclides)
   3. Perform analysis (by Jie & Even)
   4. create report (by teams)
 
