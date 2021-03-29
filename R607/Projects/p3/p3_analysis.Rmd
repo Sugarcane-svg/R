@@ -1,0 +1,126 @@
+---
+title: "p3: what is the most valuable skill in data science"
+subtitle: "Analysis and visualization"
+author: "Jie Zou"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+```{r load-packages, message=FALSE}
+library(tidyverse)
+library(DT)
+library(dplyr)
+library(plotly)
+```
+
+```{r}
+df <- read.csv("https://github.com/Sugarcane-svg/R/blob/main/R607/Projects/p3/Project3_Progress_210325.csv")
+
+df <- df %>%
+  rename(
+    position = Position,
+    location = Location,
+    company = ad_poster,
+    company_type = ad_poster_type,
+    industry = job_Knowledge_Domain
+    )
+
+library(stringr)
+df$position <- str_trim(df$position)
+```
+
+*This job name also represents data science, so when so many names are at work, which ones appear most often?*
+```{r}
+positions <- df %>% 
+  count(position)
+
+ggplotly(ggplot(positions %>% filter(n > 3), aes(x = position, y = n)) +
+  geom_bar(stat = "identity") + 
+  coord_flip() +
+  labs(x = "number of position",
+       y = "name of position",
+       title = "Names of position that more than three companies posted "))
+```
+*What are the average annual salary of these companies and how many of them offer the same average annual salary?*
+
+the average annual salary of these companies are calculated and stored under variable named avg_annual_salary. The most common average annual salary is 5000, which means that the 88 companies with the same average provide the basic salary and the maximum salary span of 2 * 5000 = 10000
+```{r}
+# subset of data: [position], [company], [average_annual_salary], [company_type]
+avg_annum <- df %>%
+  filter(Salary.Period == "per annum" & !is.na(Salary.Period)) %>%
+  mutate(avg_annual_salary = (Max.Salary.Lbs - Min.Salary.Lbs)/2)%>%
+  select(position, avg_annual_salary, company, company_type) %>%
+  arrange(desc(avg_annual_salary))
+
+view(avg_annum)
+# number of companies offer the same average annual salary
+count_company <- avg_annum %>% 
+  count(avg_annual_salary) %>% 
+  arrange(desc(n))
+
+ggplotly(
+  ggplot(count_company, aes(x = avg_annual_salary, y = n)) + 
+  geom_bar(stat = "identity") +
+  labs(y = "number of company",
+       title = "average annual salary within the companies")) 
+```
+
+*the larger average, the larger span. which companies offer the largest and the smallest annual salary span?*
+
+according to the calculation, both Harnham and McGregor Boyall provide the largest salary span to the position of Data Scientist and software developer. It seems reasonable. However, Hudson Shribman offers the least salary span in chemist/Analytical chemist/Materials scientist.
+```{r}
+# min and max of average annual salary
+a<-avg_annum %>% filter(avg_annual_salary == max(avg_annual_salary) | avg_annual_salary == min(avg_annual_salary))
+datatable(a)
+# min and max span of these companies
+b<- df %>% filter(((Max.Salary.Lbs-Min.Salary.Lbs)/2 == 40000 | (Max.Salary.Lbs-Min.Salary.Lbs)/2 == 500) & Salary.Period == "per annum") %>% select(-c(Posted, location, Contract,industry, X, Salary.Period))
+datatable(b)
+```
+
+*What are the major types and corresponding ratio of these companies?*
+
+the majority type of job posting companies is recruitment consultancy
+```{r}
+library(scales)
+c<-df %>% 
+  count(company_type) %>%
+  mutate(per = n/sum(n), 
+         label = str_c(percent(per), "(", n, ")")) %>%
+  arrange(desc(n))
+
+ggplot(data = c) +
+  geom_bar(aes(x = "", y = per, fill = company_type), stat = "identity", width = 1) + 
+  coord_polar("y", start = 0) +
+  geom_text(aes(x = 1.7, y = cumsum(per)-per/2, label = label)) +
+  theme_void()
+```
+*Among recruitment consultancy, which company or which companies have the most influence?*
+The company is considered influential, so its business scope should be broad. In other words, a company like this has more cooperative work than other companies, which means it will post more jobs. As we can see from the plot, the number of jobs posted by Harnham far exceeds that of other companies
+```{r}
+# business with wider scope
+d1 <- df %>% 
+  filter(company_type == "Recruitment consultancy") %>%
+  count(company) %>% 
+  arrange(desc(n))
+
+ggplot(d1 %>% filter(n > 2), aes(x = company, y = n)) + 
+  geom_bar(stat = "identity")+
+  coord_flip() +
+  labs(y = "number of job posts",
+       title = "recruitment consultancy with at least 2 job posts")
+```
+*How is the spread of locations?*
+
+we've select the companies with at least 4 job posts in one location. Ro discover the relationship between companies and location, the scatter plot is shown below, where we can see that most of companies have job location in London, some companies provide more than one locations such as Harnham and Blue Pelican.
+```{r}
+# location of these job distributed by companies with at least 4 job posts
+d2 <- df %>% 
+  group_by(company)%>%
+  count(location) %>%
+  filter(n > 3)
+  
+ggplot(d2, aes(x = location, y = company)) +
+  geom_point(aes(color = location)) + 
+  theme(axis.text.x = element_text(angle = 90, hjust = 1))
+```
+
