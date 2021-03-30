@@ -14,7 +14,7 @@ library(plotly)
 ```
 
 ```{r}
-df <- read.csv("https://github.com/Sugarcane-svg/R/blob/main/R607/Projects/p3/Project3_Progress_210325.csv")
+df <- read.csv("https://raw.githubusercontent.com/Sugarcane-svg/R/main/R607/Projects/p3/Project3_Progress_210325.csv")
 
 df <- df %>%
   rename(
