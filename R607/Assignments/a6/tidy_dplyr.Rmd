@@ -1,0 +1,92 @@
+---
+title: "tidyverse + dplyr = easy code reader"
+author: "Jie Zou"
+date: "`r Sys.Date()`"
+output:
+  prettydoc::html_pretty:
+    theme: architect
+    highlight: github
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse)
+library(dplyr)
+library(DT)
+```
+
+### Read table
+
+the data is extracted from http://www.cuny.edu/about/alumni-students-faculty/faculty/distinguished-professors/. it shows the records of professors who teach in CUNY. I already preprocess data a little
+
+```{r}
+data <- read.csv("https://raw.githubusercontent.com/Sugarcane-svg/R/main/R607/Assignments/a6/professors_in_cuny.csv")
+datatable(data)
+```
+
+### Tidy data
+
+the data is already clean actually because I didn't extract complicated information, just name, department, email and office phone number. However, there are some some prefessors who did not provide office phone number, therefore, we're going to remove these data.
+
+```{r}
+data1 <- data %>%
+  filter(!is.na(office_phone))
+```
+
+### Some Analysis Example
+
+Here, we are going to perform some simple analysis based on the "clean" data
+
+* how many distinct colleges are listed and how many professors are shown in those colleges?
+
+  *count() = group_by() + sum()*
+
+as we can see from the calculation, there are 15 distinct colleges listed, and for the individual college, the number of professrs is shown below under column name [n]
+```{r}
+head(data1 %>%
+  count(college))
+```
+
+* are there popular departments(department with more than three distinguished professors)?
+
+  *filter() = eleminate rows with the condition(s) you provide*
+
+there are 8 departments are considered popular in the case. However, I cannot believe there is no science, and English departmemt is the most outstanding one based on the result.
+
+```{r}
+a <- data1 %>% 
+  count(department)
+
+a %>% filter(n > 3)
+```
+
+* decide who is working in the graducate center and show the name of professors and the status?
+
+  *mutate() = add a column and fill in data*
+
+  *select() = specify which column you want to see*
+```{r}
+data1 <- data1 %>%
+  mutate(work_in_grad_center = ifelse(college == "CUNY Graduate Center", "yes", "no"))
+
+b <- data1 %>% 
+  select(name, work_in_grad_center)
+
+datatable(b)
+```
+* what is the percentage of those who work in grad center and who don't
+
+```{r}
+b %>%
+  count(work_in_grad_center) %>%
+  mutate(percentage = n/sum(n))
+```
+* sort by name(aphabetic)?
+
+  *arrange() = arrange the order*
+```{r}
+head(data1 %>% 
+       select(name)%>%
+       arrange(name))
+```
+
