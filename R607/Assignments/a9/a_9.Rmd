@@ -1,0 +1,63 @@
+---
+title: "a_9: Web APIs"
+author: "Jie Zou"
+date: "`r Sys.Date()`"
+output:
+  prettydoc::html_pretty:
+    theme: architect
+    highlight: github
+---
+
+### Load packages
+
+* httr: interact with web api
+* jsonlite: work with .json file
+```{r setup, message=FALSE}
+library(httr)
+library(tidyverse)
+library(jsonlite)
+library(DT)
+```
+
+### Http request
+
+check if web api process well
+```{r}
+url <- "https://api.nytimes.com/svc/movies/v2/critics/all.json?api-key=somr1GPKGZfJ1wfSsgkLuqNj8YX8GYuR"
+http_request <- GET(url)
+
+http_request
+```
+
+### Load JSON
+
+load json into data frame and show the rows and columns
+```{r}
+movies <- fromJSON(url) %>%
+  with(results) %>%
+  select(-c(multimedia,bio))
+
+glimpse(movies)
+```
+
+### Little analysis
+
+what is the ratio of part time vs. full time?
+
+there are some observations without values, it may cause the skewness when calculating the ratio, so I'm going to remove the empties.
+```{r}
+# remove empty observations
+status <- movies %>%
+  select(status) %>%
+  filter(status != "")
+
+# calculate the proportions
+status <- status %>%
+  count(status) %>%
+  mutate(ratio = round(n/sum(n), 4))
+
+datatable(status)
+```
+### Conclusion
+
+There are only 5.08% of critics are full time, and up to 94.92% are part time critics.
