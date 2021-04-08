@@ -41,28 +41,28 @@ ggplotly(ggplot(positions %>% filter(n > 3), aes(x = position, y = n)) +
        y = "name of position",
        title = "Names of position that more than three companies posted "))
 ```
-*What are the average annual salary of these companies and how many of them offer the same average annual salary?*
+*What are the difference of annual salary between these companies?*
 
-the average annual salary of these companies are calculated and stored under variable named avg_annual_salary. The most common average annual salary is 5000, which means that the 88 companies with the same average provide the basic salary and the maximum salary span of 2 * 5000 = 10000
+the subset of data set filters out the the salary paid by day, so we do not need to worry if there are going to be some extreme outliers. I subtract the min_salary from max_salary and square the residual just to make the large value larger in the way to easily see the difference. 
 ```{r}
-# subset of data: [position], [company], [average_annual_salary], [company_type]
+# subset of data: [position], [company], [diff_annual_salary], [company_type]
 avg_annum <- df %>%
   filter(Salary.Period == "per annum" & !is.na(Salary.Period)) %>%
-  mutate(avg_annual_salary = (Max.Salary.Lbs - Min.Salary.Lbs)/2)%>%
-  select(position, avg_annual_salary, company, company_type) %>%
-  arrange(desc(avg_annual_salary))
+  mutate(diff_annual_salary = (Max.Salary.Lbs - Min.Salary.Lbs)^2)%>%
+  select(position, diff_annual_salary, company, company_type) %>%
+  arrange(desc(diff_annual_salary))
 
 view(avg_annum)
 # number of companies offer the same average annual salary
 count_company <- avg_annum %>% 
-  count(avg_annual_salary) %>% 
+  count(diff_annual_salary) %>% 
   arrange(desc(n))
 
 ggplotly(
   ggplot(count_company, aes(x = avg_annual_salary, y = n)) + 
   geom_bar(stat = "identity") +
   labs(y = "number of company",
-       title = "average annual salary within the companies")) 
+       title = "annual salary difference within the companies")) 
 ```
 
 *the larger average, the larger span. which companies offer the largest and the smallest annual salary span?*
@@ -70,10 +70,10 @@ ggplotly(
 according to the calculation, both Harnham and McGregor Boyall provide the largest salary span to the position of Data Scientist and software developer. It seems reasonable. However, Hudson Shribman offers the least salary span in chemist/Analytical chemist/Materials scientist.
 ```{r}
 # min and max of average annual salary
-a<-avg_annum %>% filter(avg_annual_salary == max(avg_annual_salary) | avg_annual_salary == min(avg_annual_salary))
+a<-avg_annum %>% filter(diff_annual_salary == max(diff_annual_salary) | diff_annual_salary == min(diff_annual_salary))
 datatable(a)
 # min and max span of these companies
-b<- df %>% filter(((Max.Salary.Lbs-Min.Salary.Lbs)/2 == 40000 | (Max.Salary.Lbs-Min.Salary.Lbs)/2 == 500) & Salary.Period == "per annum") %>% select(-c(Posted, location, Contract,industry, X, Salary.Period))
+b<- df %>% filter(((Max.Salary.Lbs-Min.Salary.Lbs) == max(Max.Salary.Lbs-Min.Salary.Lbs) | (Max.Salary.Lbs-Min.Salary.Lbs) == min(Max.Salary.Lbs-Min.Salary.Lbs)) & Salary.Period == "per annum") %>% select(-c(Posted, location, Contract,industry, X, Salary.Period))
 datatable(b)
 ```
 
