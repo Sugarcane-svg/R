@@ -1,0 +1,142 @@
+---
+title: "a_10: Sentiment analysis"
+author: "Jie Zou"
+date: "`r Sys.Date()`"
+output:
+  prettydoc::html_pretty:
+    theme: architect
+    highlight: github
+---
+
+```{r setup, message=FALSE, warning=FALSE}
+library(gutenbergr)
+library(dplyr)
+library(tidyverse)
+library(tidytext)
+library(textdata)
+library(stringr)
+```
+
+
+
+## The Data
+
+  The novels that I found interesting are in project gutenberg call "The Secret Garden" and "The Scarlet Letter"(by its name). So, first what we need to do is the obtain the data. There are more than one book with the same title, however, each book with the same title will have the same author, so it should be fine if we pick any one of them.
+```{r message=FALSE}
+# get the novel ID from gutenberg data
+gutenberg_metadata %>%
+  filter(title %in% c("The Secret Garden", "The Scarlet Letter")) %>%
+  dplyr::select(gutenberg_id, title, author)
+
+# base on ID, we get the novels
+novels <- gutenberg_download(c(25344,113))
+```
+
+
+## Tidy: one token per row
+
+  what we are going to do here is to split sentence into tokens and remove stop words.
+```{r}
+scarlet_letter <- novels %>%
+  filter(gutenberg_id==25344) %>%
+  mutate(linenumber = row_number()) %>%  # have novel with line number
+  unnest_tokens(word, text) %>%  # tokenization
+  anti_join(stop_words)  # remove stop words
+
+secret_garden <- novels %>%
+  filter(gutenberg_id == 113) %>%
+  mutate(linenumber = row_number())%>%
+  unnest_tokens(word, text) %>%
+  anti_join(stop_words)
+
+# remove special characters and numbers
+scarlet_letter$word<-as.character(scarlet_letter$word %>%
+  map(function(x) str_replace_all(x, "[-|_|*]|[0-9]|[:space:]", "")))
+
+secret_garden$word<-as.character(secret_garden$word %>%
+  map(function(x) str_replace_all(x, "[-|_|*]|[0-9]|[:space:]|^[mdclxvi]+$", "")))
+
+# remove empty words
+scarlet_letter <- scarlet_letter %>% filter(word != "")
+secret_garden <- secret_garden %>% filter(word != "")
+```
+  
+## Sentiment analysis 
+
+
+#### the word count of both novels
+
+  as we can see the word counts from them, the names and the synonym of professions are the lead.
+```{r}
+# scarlet letter
+scarlet_letter %>% count(word, sort = TRUE)
+
+# secret garden
+secret_garden %>% count(word, sort = TRUE)
+```
+
+#### joy words in both novels
+
+  surprise that both of novels have joy words like mother and child in the top 10
+```{r}
+# get the good words
+good_words <- get_sentiments("nrc") %>%
+  filter(sentiment == "joy")
+
+scarlet_letter %>% 
+  inner_join(good_words) %>%
+  count(word, sort = TRUE)
+
+secret_garden %>%
+  inner_join(good_words) %>%
+  count(word, sort = TRUE)
+```
+
+#### positive and negative words in these two novels
+  
+  using Bing lexicon to calculate the positive and negative words, we can see from the plot that both novels have more negative words than positive ones. compared gutenberg id 113 (The secret garden), the 25344 (the scarlet letter) shows three peaks in the positive words, the secret garden shows that the positive words appear roughly in the 1/3 toward the end.
+  
+```{r}
+# data with two novels
+both_novel <- rbind(scarlet_letter, secret_garden)
+
+# use bing sentiment lexicon
+both_novel <- both_novel %>%
+  inner_join(get_sentiments("bing")) %>%
+  count(gutenberg_id, index = linenumber %/% 80, sentiment) %>%
+  pivot_wider(names_from = sentiment, values_from = n, values_fill = 0) %>%
+  mutate(sentiment = positive - negative)
+
+# plot the result
+ggplot(both_novel, aes(x = index, y = sentiment, fill = gutenberg_id)) +
+  geom_col(show.legend = FALSE)+
+  facet_wrap(~gutenberg_id, scales = "free_x")
+
+```
+
+#### would you like these novels based on word analysis?
+  
+  base on the positive word rate, these two novels seem talk about sad stories. So I would not like these two novels.
+```{r}
+# sum of positive and negative word in scarlet letter
+both_stat <- both_novel %>%
+  group_by(gutenberg_id) %>%
+  summarize(sum_pos = sum(positive),
+            sum_neg = sum(negative)) %>%
+  mutate(pos_rate = round(sum_pos/(sum_pos+sum_neg), 3),
+         novel = ifelse(gutenberg_id == 113, "The Secret Garden", "The Scarlet Letter"))
+
+DT::datatable(both_stat)
+```
+
+#### what if you have to pick one of them to read, which one would you pick?
+  
+  based on the statistic we've calculated in the previous chunk, I would like the secret garden more than the scarlet letter. From the plot, we can see that the positive rate between these two novels are very close. if I must pick one to read, I would like to have the secret garden.
+```{r}
+ggplot(both_stat, aes(x = novel, y = pos_rate, fill = gutenberg_id)) +
+  geom_bar(stat = "identity", show.legend = FALSE) +
+  labs(x = "novel names",
+       y = "positive rate",
+       title = "comparison between two novels")
+```
+
