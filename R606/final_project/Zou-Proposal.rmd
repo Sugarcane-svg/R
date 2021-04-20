@@ -1,0 +1,98 @@
+---
+title: "DATA 606 Data Project Proposal"
+author: "Jie Zou"
+output: pdf_document
+---
+
+### Data Preparation
+
+```{r setup, echo=TRUE, results='hide', warning=FALSE, message=FALSE}
+library(tidyverse)
+library(dplyr)
+library(DT)
+
+candy <- read.csv("https://raw.githubusercontent.com/fivethirtyeight/data/master/candy-power-ranking/candy-data.csv")
+```
+All we need from the data is the name and sugar content, price and popularity, therefore, we are going to have the subset of data containing name of candy, sugar percentage, unit price percentage and overall win percentage, and I am going to rename the column name to easier to see the variables
+```{r}
+candy <- candy %>% 
+  dplyr::select(competitorname, sugarpercent,pricepercent,winpercent)
+
+colnames(candy) <- c("candy_name", "sugar_percent", "unit_price_percent", "win_percent")
+
+#write.csv(candy, "~/Desktop/candy.csv")
+```
+
+### Research question 
+
+**You should phrase your research question in a way that matches up with the scope of inference your dataset allows for.**
+
+  is sugar content predictive of win percent?
+
+
+### Cases 
+
+**What are the cases, and how many are there?**
+
+  Each case represent a type of candy, and there are 85 observations on the given data set
+```{r}
+dim(candy)
+```
+  
+
+### Data collection 
+
+**Describe the method of data collection.**
+
+  Data is collected by FiveThirtyEight to figure out what Halloween candy people prefer.
+
+
+### Type of study 
+
+**What type of study is this (observational/experiment)?**
+
+  It is an observational study
+
+
+
+### Data Source 
+
+**If you collected the data, state self-collected. If not, provide a citation/link.**
+
+  the data is collected by a survey called [what's the best halloween candy](http://walthickey.com/2017/10/18/whats-the-best-halloween-candy/) and upload to [fivethirtyeight's github](https://github.com/fivethirtyeight/data/tree/master/candy-power-ranking)
+
+
+
+### Dependent Variable
+
+**What is the response variable? Is it quantitative or qualitative?**
+
+  the response variable is win_percent and it is quantitative
+
+
+
+### Independent Variable
+
+**You should have two independent variables, one quantitative and one qualitative.**
+
+  name of candy is qualitative
+  
+  sugar percent is quantitative
+
+
+### Relevant summary statistics 
+
+**Provide summary statistics for each the variables. Also include appropriate visualizations related to your research question (e.g. scatter plot, boxplots, etc). This step requires the use of R, hence a code chunk is provided below. Insert more code chunks as needed.**
+
+```{r}
+summary(candy)
+```
+
+```{r}
+ggplot(candy, aes(sugar_percent)) +
+  geom_histogram(binwidth = 0.10)
+```
+```{r}
+ggplot(candy, aes(win_percent)) + geom_histogram(binwidth = 5)
+```
+

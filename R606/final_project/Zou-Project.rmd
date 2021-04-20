@@ -1,0 +1,181 @@
+---
+title: DATA 606 Data Project
+author: Jie Zou
+---
+
+
+```{r echo=FALSE, message=FALSE}
+# load package
+library(tidyverse)
+library(psych)
+
+```
+
+
+### Part 1 - Introduction
+  
+  People like candies. Especial holidays like Halloween, candies are even more popular than usual. Many businesses have to supply different candies for customers to choose, but there are so many varieties of candies in the world, and each business will not stock up all kinds of candies. So those candies that are the best for sale or those that are the most popular became a key for businesses to order. Therefore, I want to see if the sugar content of a candy judge its popularity.
+
+### Part 2 - Data
+
+  The data set was found in FiveThirtyEight and I got it from its github. Ans it contains fields of ingredients, textures, shape and packaging style. The whole data set follow [this link](https://raw.githubusercontent.com/fivethirtyeight/data/master/candy-power-ranking/candy-data.csv), The dependent variable is the win_percent which is numerical, the independent variable is sugar_percent and candy_name, they are numerical and categorical respectively.
+  
+  Research question: Does sugar content predictive of win percent?
+  
+
+### Part 3 - Exploratory data analysis
+  There are 85 observations and 4 useful variables. Each observation is presenting one kind of candy.
+  
+```{r}
+# import data
+candy <- read.csv("https://raw.githubusercontent.com/Sugarcane-svg/R/main/R606/final_project/candy.csv")
+
+# over view of data set
+candy$X <- NULL
+glimpse(candy)
+```
+  
+```{r}
+# summary of data set
+candy %>% 
+  dplyr::select(-c(candy_name)) %>%
+  describe()
+```
+
+```{r}
+# histogram of sugar_percent
+ggplot(candy, aes(x = sugar_percent)) + 
+  geom_histogram(binwidth = 0.10) +
+  xlab("percentile of sugar")
+```
+
+```{r}
+# histogram of win_percent
+ggplot(candy, aes(x = win_percent)) + 
+  geom_histogram(binwidth = 5) +
+  xlab("overall win percentage")
+```
+
+### Part 4 - Inference
+
+#### win vs. sugar
+
+  Lets take a look at the scatter plot
+```{r}
+ggplot(candy, aes(x = sugar_percent, y = win_percent)) + 
+  geom_point()
+```
+
+  The summary of linear model
+```{r}
+lm <- lm(candy$win_percent ~ candy$sugar_percent)
+summary(lm)
+```
+
+  So we get the equation:
+  
+      $\widehat{win} = 11.924 * \widehat{sugar} + 44.609$
+    
+
+  the slope is positive, which mean that every percent of sugar added in the candy will have 11.924 higher chance to win. The $R^2=0.053$ which shows that the 5.3% of variability in winpercent is explained by sugarpercent.
+
+Now, we take a look at the residual plot, it doesn't seem to have strange pattern, so linear model is fine to use. 
+```{r}
+ggplot(data = lm, aes(x = .fitted, y = .resid)) +
+  geom_point() +
+  geom_hline(yintercept = 0, linetype = "dashed") +
+  labs(x = "Fitted values",
+       y = "Residuals", 
+       title = "Residual plot")
+
+```
+
+  the following is the scatter plot with y = win_percent and x = sugar_percent, the blue line is the linear model which use sugar percent to predict the win percent.
+```{r}
+ggplot(data = candy, aes(x = sugar_percent, y = win_percent))+
+  geom_point()+
+  geom_smooth(method = "lm", formula = y~x, se = FALSE)+
+  labs(title = "win percent vs. sugar percent")
+```
+
+  From the blue line in the plot above, we see it does not pass though many points, and $R^2$ restates that this linear model only explain 5.3% of variability. However, the residual plot indicate that it is fine to use linear model to make the prediction. So the next we can do is to do the forward selection and see if adding one more variable will increase $R^2$ value to achieve better linear model.
+  
+#### forward selection (win vs. sugar + unit price)
+```{r}
+# linear model with 2 variables
+lm_2 <- candy %>% 
+  select(-c(candy_name))
+lm2 <- lm(lm_2$win_percent~lm_2$sugar_percent+lm_2$unit_price_percent)
+summary(lm2)  
+
+resid_and_fitted <- data.frame(resid = lm2$residuals, fitted = lm2$fitted.values) %>%
+  mutate(leverage_point = ifelse(resid > 30 | resid < -30, "yes", "no"))
+```
+  The $R^2$ from one variable is around 5.3%, let's call it $R_1^2$, but $R_2^2$ (the adjusted $R^2$ from two variables) is around 11.3%, which means that value of $R_2^2$ increases 6%. The coefficient of sugar_percent from 11.9 down to 6.7, which implies that there is bias when using only one variable to predict the win_percent, while adding one more variable, the additional variable reduces some bias, that is the reason why the coefficients of sugar_percent are different.
+  
+  The equation: 
+    $\widehat{win} = 39.79 + 6.73*\widehat{sugar} + 15.586*\widehat{price}$
+  
+  
+  Now, we are going to take a look at the residual plot. Even though there are two point may be considered high leverage point(the one is in the upper left and the other one is on the lower right, it would result the slope of linear model tilt down), the variability of approximately constant.
+```{r}
+ggplot(resid_and_fitted, aes(fitted, resid, color = leverage_point)) +
+  geom_point() +
+  geom_hline(yintercept = 0, linetype = "dashed") +
+  labs(x = "fitted value",
+       y = "residuals",
+       title = "residual plot with 2 variables")
+```
+  
+  The plot of linear model with 2 variables
+```{r}
+ggplot(data = candy, aes(x = sugar_percent + unit_price_percent, y = win_percent))+
+  geom_point()+
+  geom_smooth(method = "lm", formula = y~x, se = FALSE)+
+  labs(title = "win percent vs. sugar percent and unit price percent")
+```
+  
+
+#### backward elimination (win vs. unit price)
+
+  we know that 2 variables increasing the goodness of fit of model. However, when we take a close look that the summary table, the p-value for both variable tells us something as well. It is greater than significant level in sugar_percent but it is below the significant level for unit_price percent, therefore, I guess, if we take out the sugar_percent, it may increase the goodness of fit as well.
+```{r}
+# linear model with only unit_price
+lm3 <- lm(candy$win_percent~candy$unit_price_percent)
+summary(lm3)
+```
+  
+  Because there is only one explanatory variable, we are going to take a look at simple $R^2$ instead of adjusted $R^2$. From the observation, the $R_2^2$ is 11.3%, and the $R^2$ here is 11.9%. It means that modeling win percent from unit price percent increases the goodness of fit approximately 0.6%. 
+  
+  the equation:
+    $\widehat{win} = 41.98 + 17.78 *\widehat{price}$
+    
+  Interpretation:
+    slope: every additional unite price will result 17.78 more win percent.
+    intercept: if unit price were set to 0, the win percent would be 41.98.
+    
+  
+  the residual plot shows the variance is roughlt constant.
+```{r}
+ggplot(lm3, aes(.fitted, .resid)) +
+  geom_point()+
+  geom_hline(yintercept = 0, linetype = "dashed")
+```
+  
+  below is the linear model of win vs unit price
+```{r}
+ggplot(data = candy, aes(x = unit_price_percent, y = win_percent))+
+  geom_point()+
+  geom_smooth(method = "lm", formula = y~x, se = FALSE)+
+  labs(title = "win percent vs. unit price percent")
+```
+  
+### Part 5 - Conclusion
+
+  sugar content does somewhat prediction on the candy win percentage. However, with sugar percent and unit price percent, the $R^2$ of corresponding linear model explains that 6% higher variability than the one with only variable sugar percent. Furthermore, according to the backward elimination analysis, the resulting $R^2$ of variable unit price percent has the highest value. Therefore, I will conclude that these three model can all predict the win percent, however, the unit price percentage will be the best model among the three.
+
+
+### References
+
+1. [data site link](https://github.com/fivethirtyeight/data/tree/master/candy-power-ranking)
+2. [tidy data link](https://raw.githubusercontent.com/Sugarcane-svg/R/main/R606/final_project/candy.csv)
