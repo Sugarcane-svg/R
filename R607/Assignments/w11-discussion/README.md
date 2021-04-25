@@ -9,3 +9,7 @@
     i. who are your target user?
     ii. what are their key goals?
     iii. how can you help them accomplish the goals?
+
+### Article link
+ 
+ * [map-based job recommendation system](https://thesai.org/Downloads/Volume10No9/Paper_45-A_Map_based_Job_Recommender_Model.pdf)
