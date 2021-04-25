@@ -1,0 +1,44 @@
+---
+title: "scenario analysis"
+author: "Jie Zou"
+date: "4/25/2021"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+### recommendation system in job posting website
+
+  We know that the recommendation system is very popular and extremely useful because it enhances user experience by referring the similar products or accociations. It is also widely used in different areas such as Amazon, Youtube, Netflix and job posting websites like Indeed, Linkedin an so on. 
+  
+  Finding a job is the first thing everyone has to do when they enter society, and it is also one thing that almost everyone has to experience. To be honest, individuals hope to find a job that suit them based on their contemporary situation. However, the vocational skill requirements, geographic location, and salary of many jobs are not necessarily perfect for the person seeking the job in most cases. So what we need is to be able to have a system that can help these job seekers to have information of jobs that meet their personal preferences as much as possible. According to the analysis of the general situation, a person's work skills can be gradually honed, and the salary and treatment will change accordingly according to the proficiency of the experience, so in this case, the job location becomes an important consideration. Some people will say that remote work can also be accepted now. What I want to say is that I agree with this statement, but such remote work is a last resort under certain conditions. If this special situation disappears, then we may need to return to the original working mode, that is, face-to-face. In this case, the geographic location of work is very important.
+  
+  The article that I found interesting is related to the topic and it introduces the map-based job recommendation system where people looking for a job can search in their own location preference to get the information of job posting and see the actual distance between these jobs from current location in the map, which I think the idea is cool.
+  
+### scenario design for organization
+
+  organization: job posting companies like Indeed and Linkedin for example.
+  
+  target user: job seekers
+  
+  what are the key goals: provide the job information based on seeker's location preference
+  
+  how can you help to accomplish the goal: the detail of algorithm is showing on the article. To short, we are going to take the preference as input, compare the cosine similarity between input and available job posts online. If the similarity is close to 1, we will recommend the data to user.
+  
+  
+### scenario design for customer
+
+  customer: any potencial job seekers
+  
+  target user: users who wish to see jobs in the map
+  
+  what are the key goals: to find the job around the area 
+  
+  how can you accomplish the goal: arrcoding to the users' search result or their resume in the account, the recommendation system will send out email to them once there are jobs available and suit their preference.
+  
+  
+### conclusion
+  
+  The recommendation systems is so powerful, which I am one of those who benifit from it. However, I prefer to see from the map about how many jobs around my area and how close of these jobs from each other and/or from my temporary location, so that I can pick the one with good transportation when I don't have a car, or I can pick the one with light traffic on the road if I have a car. Unfortunately, it seems that Indeed and Linkedin do not develope map-based recommendation system yet. The article I read is talking about the map-based recommendation system in Saudi Arabia. [link](https://thesai.org/Downloads/Volume10No9/Paper_45-A_Map_based_Job_Recommender_Model.pdf)
