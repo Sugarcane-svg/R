@@ -1,0 +1,159 @@
+---
+title: "p4: document classification"
+author: "Jie Zou"
+date: "`r Sys.Date()`"
+output:
+  prettydoc::html_pretty:
+    theme: architect
+    highlight: github
+---
+```{r set up,echo=FALSE, warning=FALSE, message=FALSE}
+library(tidyverse)
+library(dplyr)
+library(readr)
+library(tm)
+library(wordcloud)
+library(e1071)
+library(stringr)
+```
+
+## load data
+
+  The files were downloaded in [link](https://spamassassin.apache.org/old/publiccorpus/), the one that I have is '20030228_spam.tar.bz2' and '20030228_easy_ham.tar.bz2'. So, the project may not be fully reproducible. 
+```{r}
+# data directory
+spam.dir<- "~/desktop/spam"
+ham.dir <- "~/desktop/easy_ham"
+```
+
+## get docs from each dir
+
+  the first file under spam folder is just the record of each file names, therefore, I remove the first file.
+```{r}
+spam.doc <- list.files(path = spam.dir, full.names = TRUE)
+ham.doc <- list.files(path = ham.dir, full.names = TRUE)
+
+# remove the first row
+spam.doc <- spam.doc[-c(1)]
+```
+
+## create data frame
+
+  create data frame for spam and ham, and add classifier indicate which doc is from spam. then combine these two data frame together and make variable content to be character vector for further tidy
+```{r}
+# spam
+spam.df <- data.frame(file = spam.doc) %>%
+  mutate(content = map(file, read_lines),
+         class = "spam")
+
+#ham
+ham.df <- data.frame(file = ham.doc) %>%
+  mutate(content = map(file, read_lines),
+         class = "ham")
+
+# combine df
+df <- rbind(ham.df, spam.df) %>%
+  select(content, class) %>%
+  mutate(content = as.character(content))
+```
+
+## tidy "content"
+
+  we're going to clean up the content a little bit.
+```{r}
+df$content <- df$content %>%
+  str_remove('^c') %>%     # remove letter c from the beginning
+  str_replace_all("\\W", " ")%>%    # non-letter words
+  str_replace_all("[0-9]", " ")%>%    # numbers
+  str_replace_all("http^\\s\\s*", " ")%>%    # links
+  str_squish()    # remove additional spaces
+```
+
+## make corpus
+  
+  further tidying the content and make corpus from it. In the previous text tidying, we did not take away the stopwords and others, so we are going to use tm package to finish tidying. tm functions are working in corpus, therefore, we need to convert variable content into corpus.
+```{r}
+corpus <- df$content %>%
+  VectorSource() %>%
+  VCorpus() %>%  # convert into corpus
+  tm_map(content_transformer(tolower)) %>%  # case insensitive 
+  tm_map(removeWords, stopwords()) %>%  # remove stopwords
+  tm_map(stemDocument) %>%
+  tm_map(stripWhitespace)
+```
+
+## word clouds
+  
+  let's take a look the word cloud to see which words appear frequently in spam and ham contents. To achieve this goal, because we already have corpus, we then need to extract the indexes of spam and ham document. and use these indexes to obtain the words in corpus.
+```{r}
+# spam word cloud
+spam.index <- which(df$class == "spam")
+wordcloud::wordcloud(corpus[spam.index], min.freq = 500)
+
+# ham word cloud
+ham.index <- which(df$class == "ham")
+wordcloud::wordcloud(corpus[ham.index], min.freq = 500)
+```
+  
+## convert corpus to data frame
+  
+  we work with data frame more than corpus, so I am going to convert the corpus into data frame. and have classifier included in the data frame.
+```{r}
+dtm <- DocumentTermMatrix(corpus) %>%
+  removeSparseTerms(0.95)  # remove terms that only contain in 5% of documents
+
+inspect(dtm)
+
+# convert
+email.dtm <- dtm %>%
+  as.matrix() %>%    # convert to matrix
+  as.data.frame() %>%    # convert to data frame
+  mutate(CLASS = df$class) %>%    # use uppercase to distinguish from words
+  select(CLASS, everything())    # show variable CLASS in the first column
+
+# change the type of CLASS to factor
+email.dtm$CLASS <- as.factor(email.dtm$CLASS)    # two levels
+```
+  
+## naive bayesian
+  
+  to do email classification, we are going to use naive bayesian method. so we're going to split the data we just convert previously with 80% of training data and 20% of testing data.
+```{r}
+# sample size
+n <- floor(nrow(email.dtm) * 0.8)
+
+# create sample indexes
+set.seed(100)
+index <- sample(seq_len(nrow(email.dtm)), size = n)
+
+# split data into training and testing
+dtm.train <- email.dtm[index,]
+dtm.test <- email.dtm[-index,]
+
+# get class labels for training and testing data set
+train.lbl <- dtm.train$CLASS
+test.lbl <- dtm.test$CLASS
+
+# inspect both data set
+dim(dtm.train)
+dim(dtm.test)
+
+# convert numeric value into categorical value except variable CLASS
+dtm.train[ ,2:507] <- ifelse(dtm.train[ ,2:507] == 0, "no", "yes")
+dtm.test[ ,2:507] <- ifelse(dtm.test[ ,2:507] == 0, "no", "yes")
+
+# make naive bayesian mode
+bay.mod <- naiveBayes(dtm.train, train.lbl)
+
+# predict the test data
+test.pred <- predict(bay.mod, dtm.test)
+
+# confusion matrix
+table(test.pred, test.lbl)
+```
+  
+
+## conclusion
+
+  as we can see from the matrix, it seems that naive bayesian predict pretty well in this case.
+
