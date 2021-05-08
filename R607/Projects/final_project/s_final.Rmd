@@ -1,0 +1,332 @@
+---
+title: "607 final project: NYC crime with other factors"
+author: "Jie Zou"
+date: "`r Sys.Date()`"
+output:
+  prettydoc::html_pretty:
+    theme: architect
+    highlight: github
+---
+
+```{r set up, echo=FALSE, warning=FALSE, message=FALSE}
+library(tidyverse)
+library(DT)
+library(XML)
+library(RCurl)
+library(dplyr)
+library(tidymodels)
+library(rjson)
+```
+
+## Introduction
+
+  the project is going to see the crime rate in New York City. Specifically, the time during covid-19 because of many events happen in this time, and I want to see if those events affect the crime rate.
+  
+  Event I: unemployeement benefit
+    government sent out unemployeement benefits to people who lost their job in this rough situation. Did the crime rate increase because of the benefit?
+    
+  Event II: hate crime
+    As we check the news everyday, we know that pandemic has increased the hatred of many people towards Asians. Is it just Asian? How many increased crime cases due to hatred? what is the spread of suspects and victims?
+    
+  To answer these questions, I found the data sets listed below, and I download and save them locally.
+  
+  1. overall NYC complaints: [NYDP complaint](https://data.cityofnewyork.us/Public-Safety/NYPD-Complaint-Data-Current-Year-To-Date-/5uac-w243)
+    
+  2. NYC hate crime: [NYDP hate crime](https://data.cityofnewyork.us/Public-Safety/NYPD-Hate-Crimes/bqiq-cu78)
+    
+  3. NYC unemployment claims: [unemployment benefit](https://oui.doleta.gov/unemploy/wkclaims/report.asp)
+    
+## load data
+```{r}
+# NYDP complaint data
+complaint <- read.csv("~/Desktop/readings/NYPD_Complaint_Data_Current__Year_To_Date_.csv")
+
+# NYDP hate crime data
+hate <- read.csv("~/Desktop/readings/NYPD_Hate_Crimes.csv")
+
+# unemployment claims
+xml.parse <- xmlRoot(xmlParse(getURL("https://raw.githubusercontent.com/Sugarcane-svg/R/main/R607/Projects/final_project/unemployeement.xml")))
+unemp <- xmlToDataFrame(xml.parse)
+```
+
+
+## Tidy data
+
+  To check the dimension of each data set, we can see that complaint data has over 40K observations and 36 variables, hate data has 832 observations and 15 variables, and unemployment data has 1790 observations and 7 variables.
+
+```{r}
+dim(complaint)
+dim(hate)
+dim(unemp)
+```
+
+  we are not going to see complaint records day by day, instead, we are going to see the observation monthly. therefore, I split the date format into month and year. and tidy a bit of complaint data set because it seems "dirty" so far. Meanwhile, we are focusing on the observations that are only after 2018.
+  
+```{r}
+# split date into month and year
+complaint_date <- complaint %>%
+  select(CMPLNT_FR_DT) %>%
+  mutate(month = str_extract(CMPLNT_FR_DT, "^\\d{2}"),
+         year = str_extract(CMPLNT_FR_DT, "\\d{4}$"))
+
+# subset of complaint data whose observations are after 2018
+complaint1 <- complaint %>%
+  select(-c(CMPLNT_NUM,ADDR_PCT_CD,CMPLNT_FR_DT,CMPLNT_TO_DT,CMPLNT_TO_TM,HADEVELOPT,HOUSING_PSA,KY_CD,PARKS_NM, PATROL_BORO,RPT_DT, STATION_NAME,JURISDICTION_CODE, TRANSIT_DISTRICT,X_COORD_CD, Y_COORD_CD, Latitude, Longitude, Lat_Lon, New.Georeferenced.Column)) %>% # take out the variables not used for analysis
+  mutate(month = complaint_date$month,  # split date into month and year
+         year = complaint_date$year) %>%
+  filter(year >= 2019) # get observation after 2018
+
+unemp1 <- unemp %>% 
+  mutate(
+    month = str_extract(weekEnded, "^\\d{2}"),
+    year = str_extract(weekEnded, "\\d{4}$"),
+    InitialClaims = str_remove(InitialClaims, "[,]")
+         ) %>% 
+  select(month, year, InitialClaims, InsuredUnemploymentRate) %>%
+  filter(year >= 2019) %>%
+  group_by(month, year) %>%
+  mutate(monthly_initial_claims = sum(as.numeric(InitialClaims))) # compute monthly claims
+```
+
+## Explore data 
+
+### complaint data set
+
+**which year has the most criminal activities happen?**
+  
+  since complaint data has only updated until Jan. 2021, there are no records for 2021 yet. We can see that there were 98.4% of cases reported from 2020, and 1.6% from 2019
+```{r}
+ggplot(complaint1, aes(x = year)) +
+  geom_bar() +
+  labs(y = "number of cases",
+       title = "2019 vs 2020: total crime cases")
+
+complaint1 %>% 
+  count(year) %>%
+  summarize(ratio = n/sum(n))
+```
+**which county has the most criminal activities?**
+
+  as we can see from the plot, Brooklyn had the most crime activicies(received more complaints). If we remove the undefined observartions, we see that Brooklyn had 28.9% of crime rate, and Staten Island had the lowest crime rate.
+```{r}
+ggplot(complaint1, aes(x = BORO_NM)) + 
+  geom_bar() +
+  labs(x = "county",
+       y = "number of crime cases",
+       title = "crime cases distributed in each county")
+
+complaint1 %>% 
+  filter(BORO_NM !="") %>% 
+  count(BORO_NM) %>%
+  mutate(ratio = n/sum(n))
+```
+**among these complaints, what is the dominant offense category?** 
+
+  According to the plot, we see that misdemeanor is the dominant category, it took over 50% of overall crime cases.
+
+```{r}
+ggplot(complaint1, aes(x=LAW_CAT_CD)) +
+  geom_bar() +
+  labs(x = "level of offense",
+       y = "cases")
+
+complaint1 %>% 
+  count(LAW_CAT_CD) %>%
+  mutate(ratio = n/sum(n))
+```
+
+
+### complaint vs unemployment claim? 
+
+**did crime cases increase when there were more people make initial claim in unemployment benefit?**
+
+  first of all, we need to take a look at the distribution of monthly initial claims, we found that the initial claims in 2019 were pretty stable. While, in 2020, the initial claims increased from March and became roughly stable after June. It was reasonable because large amount of people lost their jobs and the city had lockdown during that time. the updated records only show the first quarter of 2021, however, we can still see that the initial claim is decreasing.
+```{r}
+# the spread of initial claims
+ggplot(unemp1, aes(x = as.integer(month), y=monthly_initial_claims, color = year)) +
+  geom_point()+
+  geom_line() +
+  labs(x = "month",
+       y = "monthly initial claims",
+       title = "monthly initial claim status of listed years")
+```
+  
+  secondly, we are going to take a look at the crime cases after 2018. The plot is showing the cases distribution, we see that in 2020, the lowest reported cases in the month that had highest initial claim. It surprises me because I thought the crime cases were going to increase, at least cyber crime.
+
+```{r}
+# 2020 crime cases
+ggplot(complaint1, aes(x = month, fill = year)) + 
+  geom_bar(position = "dodge") +
+  labs(y = "cases",
+       title = "2019 vs 2020: crime cases by month")
+
+```
+  
+  now, we are going to focus on 2020 to see if there is any relationship between unemployment claims and overall complaints. firstly, we subset the monthly complaint data, then we subset the monthly claim data, and join them together by month. Finally using linear model to see of there is relationship. The linear mode has negative slope, which mean every new initial claim will reduce the complaint by 0.0088. the r-sq is 60% which mean the model explains 60% of variance. p-value is smaller than significant level(0.05), which means that the relationship is significant.
+  
+  the linear equation is $\widehat{cases}= -0.0088 * claims + 37210.50$
+```{r}
+# subset of monthly crimes case
+monthly_complaints <- complaint1 %>% 
+  filter(year == 2020) %>%
+  select(month, BORO_NM) %>%
+  count(month)
+
+# modify column names
+colnames(monthly_complaints) <- c("month", "monthly_cases")
+
+# subset of monthly initial claims
+monthly_claims <- unemp1 %>%
+  filter(year == "2020") %>%
+  select(month, InitialClaims) %>%
+  group_by(month) %>%
+  summarize(monthly_claims = sum(as.numeric(InitialClaims)))
+
+# data set with monthly complaints and monthlt initial claims
+monthly_claims_complaints <- monthly_complaints %>%
+  left_join(monthly_claims, by = "month")
+
+# relationship between monthly claims and monthly complaints
+lm_claim_complaint <- linear_reg(mode = "regression") %>%
+  set_engine("lm") %>%
+  fit(monthly_cases~monthly_claims, data = monthly_claims_complaints)
+
+ggplot(monthly_claims_complaints, aes(x = monthly_claims, y = monthly_cases)) +
+  geom_point() +
+  geom_smooth(method = "lm", formula = y~x, se = FALSE)
+
+# check the assumption of lm
+plot(lm_claim_complaint$fit) 
+
+tidy(lm_claim_complaint) # lm info
+glance(lm_claim_complaint) # r-sq and p-value
+```
+
+### hate crime
+
+**how is the hate crime distribution annually?**
+  
+  we see from the plot that 2019 and 2020 did not show much increases or decreases or crime case, they were roughly stable in the year. however, 2021, we can clearly see the increase of crime cases. 
+```{r}
+hate <- hate %>% 
+  mutate(Month.Number = str_extract(Record.Create.Date, "^\\d{2}"))
+
+# hate crime distribution monthly
+supp_line <- hate %>% 
+  count(Month.Number, Complaint.Year.Number)
+
+ggplot(hate, aes(x = Month.Number, fill = as.character(Complaint.Year.Number))) +
+  geom_bar(position = "dodge") +
+  guides(fill = guide_legend(title = "year")) +
+  labs(x = "month")
+```
+
+**the distribution of offense type**
+
+  like complaint data set, the main two categories of offense are felony and misdemeanor which take up about 98%.
+```{r}
+# offense level
+ggplot(hate, aes(x = Law.Code.Category.Description)) +
+  geom_bar() +
+  labs(x = "offense type",
+       y = "number of cases",
+       title = "the number of cases in hate crime of offense category")
+
+hate %>% 
+  count(Law.Code.Category.Description) %>% 
+  mutate(ratio = n/sum(n))
+```
+
+**hate crime cases distributed in different county**
+
+  from the plot, both Brooklyn and Manhattan have more crime cases than other county and similarity, Brooklyn is in the dominant position like the observation in complaint data.
+```{r}
+# hate crime spread in different county
+hate_county <- hate %>%
+  count(County) %>% 
+  arrange(desc(County)) %>% 
+  mutate(prop = n/sum(n) * 100) %>% 
+  mutate(ypos = cumsum(prop) - 0.5*prop)
+ 
+ggplot(hate_county, aes(x = "", y = prop, fill = County))+
+  geom_bar(stat = "identity") +
+  coord_polar("y", start = 0) +
+  geom_text(aes(y = ypos, label = paste(round(prop, 0), "%")), size = 3, color = "white") +
+  theme_void() +
+  labs(title = "hate crime cases in each county")
+```
+
+**how many of these crime actually got caught?**
+
+  Although, the plot shows 2019 has the most hate crime being caught. notice that the record for 2021 only showing the first quarter, and it already takes up 14%. it indicates that the number of arrested crime may exceed previous years.
+```{r}
+# hate crime actually got caught in these years
+hate <- hate %>% 
+  mutate(arrested = ifelse(Arrest.Date=="", "no", "yes"))
+
+hate_arrest <- hate %>% 
+  filter(arrested == "yes") %>% 
+  count(Complaint.Year.Number) %>% 
+  arrange(desc(Complaint.Year.Number)) %>% 
+  mutate(prop = n/sum(n) * 100) %>% 
+  mutate(ypos = cumsum(prop) - 0.5*prop)
+
+ggplot(hate_arrest, aes(x = "", y = prop, fill = as.character(Complaint.Year.Number))) +
+  geom_bar(stat = "identity") +
+  coord_polar("y", start = 0) + 
+  theme_void() +
+  geom_text(aes(y = ypos, label = paste(round(prop, 0), "%")), size = 3, color = "white") +
+  labs(title = "ratio of arrested hate crimes in these years") +
+  guides(fill = guide_legend("year"))
+```
+
+**how much has hate crime increased?** 
+
+  based on the question, we know that the hate crime is increasing in the first quarter of 2021. So, I made a subset of data showing the hate crime cases on only Jan, Feb, March in these year for the convenience of comparison.
+```{r}
+hate_increase <- hate %>% 
+  filter(Month.Number == "01" | Month.Number =="02"|Month.Number =="03") %>%  # get the month
+  select(Month.Number, Complaint.Year.Number) %>%
+  count(Month.Number, Complaint.Year.Number) %>% 
+  group_by(Complaint.Year.Number) %>% 
+  mutate(quarter_sum = sum(n)) # three month total of these year
+
+DT::datatable(hate_increase)
+# comparison in Jan, Feb and March in 2021
+paste("compare to Jan. 2021, Feb. 2021 has increased", round((23-17)/17,2) * 100, "%")
+paste("compare to Feb. 2021, March. 2021 has increased", round((61-23)/23,2) * 100, "%")
+
+# compare 2019 with 2021
+paste("compare to March. 2019, March. 2021 has increased", round((61-54)/54,2) * 100, "%")
+paste("compare to March. 2020, March. 2021 has increased", round((61-34)/34,2) * 100, "%")
+```
+
+**who are the main victims in hate crime? what about the overall complaint cases?** 
+
+  from the statistic below(estimation), the most cases of hate crime type is anti-jewish, then anti-black. Anti-asian is on the forth position. From the whole complaint data, except the undefined and unknown race, the rate of considering Asians as suspects or victims are both below 10%. However, considering Black race will range around 26% to 28%. However, the whole complaint data does not contain the records in 2021, if the data set will be up to date, the ratio should be more accurate. 
+```{r}
+# hate crime type included 2021
+hate %>% 
+  count(Bias.Motive.Description, sort = TRUE)
+
+# overall victim type not included 2021
+victim <- complaint1 %>% 
+  count(VIC_RACE)
+colnames(victim) <- c("race", "v_n")
+# overall suspect type not included 2021
+suspect <- complaint1 %>% 
+  count(SUSP_RACE)
+colnames(suspect) <- c("race", "s_n")
+victim %>% 
+  left_join(suspect, by = "race") %>%
+  mutate(v_ratio = round(v_n / sum(v_n), 3),
+         s_ratio = round(s_n / sum(s_n), 3))
+```
+
+
+## Conclusion
+
+  the unemployment benefit actually lower the crime rate which is out of my expectation. For the hate crime, even though there were lots of news showing the hatred towards to Asians, according to the statistic, Asians are not the main group hated by others. African Americans are the main victims.
+
+
+
