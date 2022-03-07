@@ -61,16 +61,9 @@ the correlation between predictors doesn't appear to be linear
 pairs(data)
 ```
 
-## data prepreparation
-since there are predictors highly skewed, we need to transform them
-```{r}
-# transform zn
-
-```
-
 ## building model
 
-### linear regression
+### linear regression(not valid)
 
 from the summary, the model only explains 61% of data, and there are more than one predictors don't have significant impact in predicting data, the added variable plot also showing the same.
 
@@ -82,40 +75,54 @@ data.lm <- lm(target ~ ., data = data)
 summary(data.lm)
 plot(data.lm)
 ```
-### box-cox transformation
-
-$$ Y_i^{(\lambda)} = \{^{\frac{Y_i^{\lambda} -1}{\lambda} (\lambda \neq0)}_{log(Y_i) (\lambda = 0)}$$
-boxcox is not going to transform data when the value is less or equal to 0, so I add 1 to the target value. It wont change the shape of the plot.
-```{r}
-# apply box-cox transformation
-data.bc = boxcox(target+1~., data = data)
-
-# obtain lambda value
-lamda <- data.bc$x[which.max(data.bc$y)]
-
-# apply power back to the model
-back_transform <- function(y, lamda = 0){
-  if(lamda == 0){
-    log(y)
-  }else{
-    ((y+1)^lamda)/lamda
-  }
-}
-
-data['target.t'] = back_transform(data$target, lamda)
-hist(data$target.t)
-```
-```{r}
-# re-run linear mode with transformation
-lm(target.t ~ . - target, data = data)
-```
 
 ### logistic regression
 
+#### first model
+from added variable plot, we see that there are some variables are not helping much in predicting response variable, therefore, I am going to reduce these variables.
 
 ```{r}
-data.lm2 <- lm(I((target+1)^(-0.14))~., data = data)
-summary(data.lm2)
-plot(data.lm2)
+logit1 <- glm(target ~ . , data = data, family = binomial)
+summary(logit1)
+```
+added variable plot prove that variables 'nox', 'age', 'dis', 'rad', 'tax', 'ptratio' and 'medv' have statistically significance in predicting response variable. Since these variable are either skewed or have outliers or both. I am going to transform these variable individually.
+```{r}
+# added variable plot
+avPlots(logit1)
 ```
 
+### data transfromation
+
+```{r warning=FALSE, message=FALSE}
+attach(data)
+subset <- data.frame()
+# transform nox
+nox.bc <- boxcox(lm(nox ~ 1, data))
+nox.pow <- nox.bc$x[which.max(nox.bc$y)]
+nox.t <- back_transform(nox, nox.pow)
+
+# transform age
+age.bc <- boxcox(lm(age ~ 1, data))
+age.pow <- age.bc$x[which.max(age.bc$y)]
+data['age.t'] <- back_transform(age, age.pow)
+
+# transform dis
+dis.bc <- boxcox(lm(dis ~ 1, data))
+dis.pow <- dis.bc$x[which.max(dis.bc$y)]
+data['dis.t'] <- back_transform(dis, dis.pow)
+
+# transform rad
+dis.bc <- boxcox(lm(dis ~ 1, data))
+dis.pow <- dis.bc$x[which.max(dis.bc$y)]
+data['dis.t'] <- back_transform(dis, dis.pow)
+
+# transform tax
+tax.bc <- boxcox(lm(tax ~ 1, data))
+tax.pow <- tax.bc$x[which.max(tax.bc$y)]
+data['tax.t'] <- back_transform(tax, tax.pow)
+
+# transform ptratio
+ptratio.bc <- boxcox(lm(ptratio ~ 1, data))
+ptratio.pow <- ptratio.bc$x[which.max(ptratio.bc$y)]
+data['ptratio.t'] <- back_transform(ptratio, ptratio.pow)
+```
