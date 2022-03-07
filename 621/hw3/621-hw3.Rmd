@@ -1,0 +1,83 @@
+---
+title: "621-hw3"
+author: "Document Author"
+date: "`r Sys.Date()`"
+output:
+  prettydoc::html_pretty:
+    theme: architect
+    highlight: github
+---
+## libraries
+```{r warning=FALSE, message=FALSE}
+library(reshape2)
+library(ggplot2)
+library(dplyr)
+library(psych)
+library(MASS)
+library(car)
+```
+
+## explore data
+```{r}
+# load dataset
+data <- read.csv('crime-training-data_modified.csv')
+head(data)
+```
+13 variables in total
+```{r}
+# number of variables in total
+names(data) %>% length()
+```
+from summary, there are no missing values reported but some predictors are skewed.
+```{r}
+# brief summary
+summary(data)
+```
+
+look at those plot, predictors 'rad', 'zn' and 'tax' are highly skewed
+```{r}
+# make box plot for all variables
+data.m <- melt(data, id.vars = 'target')
+head(data.m)
+ggplot(data.m, aes(x = variable, y = value)) + geom_boxplot() + facet_wrap(~ variable, scales = 'free')
+```
+only one dummy variable in predictors, I assume that the range of other predictor would somewhat change with dummy variable.
+```{r}
+# data situation where chas == 1 
+data.f1 <- data %>% filter(chas == 1)
+data.mf0 <- data.f1 %>% melt(id.var = 'target')
+ggplot(data.mf0, aes(x = variable, y = value)) + geom_boxplot() + facet_wrap(~ variable, scales = 'free')
+```
+```{r}
+# data situation where chas != 1
+data.f0 <- data %>% filter(chas == 0)
+data.mf0 <- data.f0 %>% melt(id.var = 'target')
+ggplot(data.mf0, aes(x = variable, y = value)) + geom_boxplot() + facet_wrap(~ variable, scales = 'free')
+```
+regular pair() function cannot tell if there are any correlation between response variable and predictors. And it seems suburb border the Charles River have less predictor correlated with response variable.
+```{r warning=FALSE, message=FALSE}
+# correlation with target?
+par(mar = c(1,1,1,1))
+data %>% corPlot(main = 'whole data set')
+data.f1 %>% cor.plot(main = 'suburb border the Charles River')
+data.f0 %>% cor.plot(main = 'suburb border NOT Charles River')
+
+```
+
+## data preparation
+## building model
+
+#### linear model
+
+from the summary, the model only explains 61% of data, and there are more than one predictors don't have significant impact in predicting data.
+
+from residual plot, the variance of residual is not constant. QQ plot shows non-normality happen in the data. variance of error is not elliptically symmetric, it also shows some pattern
+```{r}
+data.lm <- lm(target ~ ., data = data)
+summary(data.lm)
+plot(data.lm)
+```
+```{r}
+avPlots(data.lm)
+```
+
