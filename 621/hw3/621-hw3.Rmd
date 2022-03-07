@@ -15,6 +15,7 @@ library(dplyr)
 library(psych)
 library(MASS)
 library(car)
+library(Hmisc)
 ```
 
 ## explore data
@@ -34,40 +35,37 @@ from summary, there are no missing values reported but some predictors are skewe
 summary(data)
 ```
 
-look at those plot, predictors 'rad', 'zn' and 'tax' are highly skewed
+
 ```{r}
 # make box plot for all variables
 data.m <- melt(data, id.vars = 'target')
 head(data.m)
 ggplot(data.m, aes(x = variable, y = value)) + geom_boxplot() + facet_wrap(~ variable, scales = 'free')
 ```
-only one dummy variable in predictors, I assume that the range of other predictor would somewhat change with dummy variable.
 ```{r}
-# data situation where chas == 1 
-data.f1 <- data %>% filter(chas == 1)
-data.mf0 <- data.f1 %>% melt(id.var = 'target')
-ggplot(data.mf0, aes(x = variable, y = value)) + geom_boxplot() + facet_wrap(~ variable, scales = 'free')
+# histogram of all columns
+par(mar = c(1,1,1,1))
+hist.data.frame(data)
 ```
-```{r}
-# data situation where chas != 1
-data.f0 <- data %>% filter(chas == 0)
-data.mf0 <- data.f0 %>% melt(id.var = 'target')
-ggplot(data.mf0, aes(x = variable, y = value)) + geom_boxplot() + facet_wrap(~ variable, scales = 'free')
-```
+
 from correlation plot, it seems suburb border to charles river will have less impact on predicting target for some predictors
 ```{r warning=FALSE, message=FALSE}
 # correlation between predictors and response
 par(mar = c(1,1,1,1))
 data %>% corPlot(main = 'whole data set')
-data.f1 %>% cor.plot(main = 'suburb border the Charles River')
-data.f0 %>% cor.plot(main = 'suburb border NOT Charles River')
-
 ```
 
 the correlation between predictors doesn't appear to be linear
 ```{r}
 # correlation between predictors
 pairs(data)
+```
+
+## data prepreparation
+since there are predictors highly skewed, we need to transform them
+```{r}
+# transform zn
+
 ```
 
 ## building model
@@ -100,7 +98,7 @@ back_transform <- function(y, lamda = 0){
   if(lamda == 0){
     log(y)
   }else{
-    (y^lamda - 1)/lamda
+    ((y+1)^lamda)/lamda
   }
 }
 
@@ -109,7 +107,7 @@ hist(data$target.t)
 ```
 ```{r}
 # re-run linear mode with transformation
-summary(lm(target.t ~ . - target, data = data))
+lm(target.t ~ . - target, data = data)
 ```
 
 ### logistic regression
