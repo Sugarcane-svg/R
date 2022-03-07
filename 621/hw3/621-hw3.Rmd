@@ -69,11 +69,6 @@ the correlation between predictors doesn't appear to be linear
 # correlation between predictors
 pairs(data)
 ```
-## data prepreparetion
-### box-cox transformation
-```{r}
-data.sub <- data[,c('nox','rm', 'age', 'lstat','medv')]
-```
 
 ## building model
 
@@ -91,9 +86,30 @@ plot(data.lm)
 ```
 ### box-cox transformation
 
+$$ Y_i^{(\lambda)} = \{^{\frac{Y_i^{\lambda} -1}{\lambda} (\lambda \neq0)}_{log(Y_i) (\lambda = 0)}$$
+boxcox is not going to transform data when the value is less or equal to 0, so I add 1 to the target value. It wont change the shape of the plot.
 ```{r}
+# apply box-cox transformation
 data.bc = boxcox(target+1~., data = data)
-data.bc$x[which.max(data.bc$y)]
+
+# obtain lambda value
+lamda <- data.bc$x[which.max(data.bc$y)]
+
+# apply power back to the model
+back_transform <- function(y, lamda = 0){
+  if(lamda == 0){
+    log(y)
+  }else{
+    (y^lamda - 1)/lamda
+  }
+}
+
+data['target.t'] = back_transform(data$target, lamda)
+hist(data$target.t)
+```
+```{r}
+# re-run linear mode with transformation
+summary(lm(target.t ~ . - target, data = data))
 ```
 
 ### logistic regression
