@@ -78,7 +78,7 @@ plot(data.lm)
 
 ### logistic regression
 
-#### first model
+#### first model(general)
 from added variable plot, we see that there are some variables are not helping much in predicting response variable, therefore, I am going to reduce these variables.
 
 ```{r}
@@ -95,7 +95,7 @@ avPlots(logit1)
 
 ```{r warning=FALSE, message=FALSE}
 attach(data)
-subset <- data.frame()
+
 # transform nox
 nox.bc <- boxcox(lm(nox ~ 1, data))
 nox.pow <- nox.bc$x[which.max(nox.bc$y)]
@@ -104,25 +104,39 @@ nox.t <- back_transform(nox, nox.pow)
 # transform age
 age.bc <- boxcox(lm(age ~ 1, data))
 age.pow <- age.bc$x[which.max(age.bc$y)]
-data['age.t'] <- back_transform(age, age.pow)
+age.t <- back_transform(age, age.pow)
 
 # transform dis
 dis.bc <- boxcox(lm(dis ~ 1, data))
 dis.pow <- dis.bc$x[which.max(dis.bc$y)]
-data['dis.t'] <- back_transform(dis, dis.pow)
+dis.t <- back_transform(dis, dis.pow)
 
 # transform rad
-dis.bc <- boxcox(lm(dis ~ 1, data))
-dis.pow <- dis.bc$x[which.max(dis.bc$y)]
-data['dis.t'] <- back_transform(dis, dis.pow)
+rad.bc <- boxcox(lm(rad ~ 1, data))
+rad.pow <- rad.bc$x[which.max(rad.bc$y)]
+rad.t <- back_transform(rad, rad.pow)
 
 # transform tax
 tax.bc <- boxcox(lm(tax ~ 1, data))
 tax.pow <- tax.bc$x[which.max(tax.bc$y)]
-data['tax.t'] <- back_transform(tax, tax.pow)
+tax.t <- back_transform(tax, tax.pow)
 
 # transform ptratio
 ptratio.bc <- boxcox(lm(ptratio ~ 1, data))
 ptratio.pow <- ptratio.bc$x[which.max(ptratio.bc$y)]
-data['ptratio.t'] <- back_transform(ptratio, ptratio.pow)
+ptratio.t <- back_transform(ptratio, ptratio.pow)
+
+# transform medv
+medv.bc <- boxcox(lm(medv ~ 1, data))
+medv.pow <- medv.bc$x[which.max(medv.bc$y)]
+medv.t <- back_transform(medv, medv.pow)
+
+subset <- data.frame(target, nox.t, age.t, dis.t, rad.t, tax.t, ptratio.t, medv.t)
 ```
+
+### second model(reduced version)
+```{r}
+logit2 <- glm(target ~ ., data = subset)
+summary(logit2)
+```
+
