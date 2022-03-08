@@ -136,7 +136,7 @@ subset <- data.frame(target, nox.t, age.t, dis.t, rad.t, tax.t, ptratio.t, medv.
 
 ### second model(reduced version)
 ```{r}
-logit2 <- glm(target ~ ., data = subset)
+logit2 <- glm(target ~ ., data = subset, family = binomial)
 summary(logit2)
 ```
 
