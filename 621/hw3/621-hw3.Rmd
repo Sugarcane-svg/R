@@ -7,7 +7,9 @@ output:
     theme: architect
     highlight: github
 ---
+
 ## libraries
+
 ```{r warning=FALSE, message=FALSE}
 library(reshape2)
 library(ggplot2)
@@ -16,52 +18,57 @@ library(psych)
 library(MASS)
 library(car)
 library(Hmisc)
+library(corrplot)
 ```
 
 ## explore data
+
 ```{r}
 # load dataset
 data <- read.csv('crime-training-data_modified.csv')
 head(data)
 ```
+
 13 variables in total
+
 ```{r}
 # number of variables in total
 names(data) %>% length()
 ```
+
 from summary, there are no missing values reported but some predictors are skewed.
+
 ```{r}
 # brief summary
 summary(data)
 ```
 
-
 ```{r}
 # make box plot for all variables
-data.m <- melt(data, id.vars = 'target')
+data.m <- melt(data, id.vars = 'target')%>% mutate(target = as.factor(target))
 head(data.m)
-ggplot(data.m, aes(x = variable, y = value)) + geom_boxplot() + facet_wrap(~ variable, scales = 'free')
-```
-```{r}
-# histogram of all columns
-par(mar = c(1,1,1,1))
-hist.data.frame(data)
+ggplot(data.m, aes(x = variable, y = value, fill = target)) + geom_boxplot() + facet_wrap(~ variable, scales = 'free')
 ```
 
-from correlation plot, it seems suburb border to charles river will have less impact on predicting target for some predictors
+```{r}
+# check normality and skewness
+data.m %>% ggplot(aes(x = value)) + geom_density() + facet_wrap(~variable, scale = 'free')
+```
+
 ```{r warning=FALSE, message=FALSE}
 # correlation between predictors and response
 par(mar = c(1,1,1,1))
-data %>% corPlot(main = 'whole data set')
+data%>% corPlot()
 ```
 
 the correlation between predictors doesn't appear to be linear
+
 ```{r}
 # correlation between predictors
 pairs(data)
 ```
 
-## building model
+## data transfromation
 
 ### linear regression(not valid)
 
@@ -70,32 +77,24 @@ from the summary, the model only explains 61% of data, and there are more than o
 from residual plot, the variance of residual is not constant. QQ plot shows non-normality happen in the data. variance of error is not elliptically symmetric, it also shows some pattern
 
 As a result, this is a not a valid model for data
+
 ```{r}
 data.lm <- lm(target ~ ., data = data)
 summary(data.lm)
 plot(data.lm)
 ```
 
-### logistic regression
-
-#### first model(general)
-from added variable plot, we see that there are some variables are not helping much in predicting response variable, therefore, I am going to reduce these variables.
-
-```{r}
-logit1 <- glm(target ~ . , data = data, family = binomial)
-summary(logit1)
-```
-added variable plot prove that variables 'nox', 'age', 'dis', 'rad', 'tax', 'ptratio' and 'medv' have statistically significance in predicting response variable. Since these variable are either skewed or have outliers or both. I am going to transform these variable individually.
-```{r}
-# added variable plot
-avPlots(logit1)
-```
-
-### data transfromation
+### transform variable
 
 ```{r warning=FALSE, message=FALSE}
 attach(data)
-
+back_transform <- function(y, lamda){
+  if(lamda ==0L){
+    log(y)
+  }else{
+    y^lamda/lamda
+  }
+}
 # transform nox
 nox.bc <- boxcox(lm(nox ~ 1, data))
 nox.pow <- nox.bc$x[which.max(nox.bc$y)]
@@ -134,9 +133,108 @@ medv.t <- back_transform(medv, medv.pow)
 subset <- data.frame(target, nox.t, age.t, dis.t, rad.t, tax.t, ptratio.t, medv.t)
 ```
 
-### second model(reduced version)
 ```{r}
-logit2 <- glm(target ~ ., data = subset, family = binomial)
+# check variables after transformation
+hist.data.frame(subset)
+melt(subset, id.vars = 'target') %>% 
+  mutate(target = as.factor(target)) %>% 
+  ggplot(aes(x = value)) +
+  geom_density() +
+  facet_wrap(~variable, scale = 'free')+
+  labs(title = 'transfromed significant variables')
+```
+
+## building model
+
+### logistic regression
+
+#### first model(logit - general)
+
+from added variable plot, we see that there are some variables are not helping much in predicting response variable, therefore, I am going to reduce these variables.
+
+```{r}
+logit1 <- glm(target ~ . , data = data, family = binomial)
+summary(logit1)
+```
+
+```{r}
+# diagnostic plot
+plot(resid(logit1)~predict(logit1, type = 'link'))
+```
+
+```{r}
+# check outliers
+plot(logit1)
+```
+
+added variable plot prove that variables 'nox', 'age', 'dis', 'rad', 'tax', 'ptratio' and 'medv' have statistically significance in predicting response variable. Since these variable are either skewed or have outliers or both. I am going to transform these variable individually.
+
+```{r}
+# added variable plot
+avPlots(logit1)
+```
+
+```{r}
+# R^2
+1-logit1$deviance/logit1$null.deviance
+```
+
+```{r}
+# plot logistic regression again predictors
+x_range <- seq(0, 465, 0.1)
+generated_data <- as.data.frame(expand.grid(x=x_range, y=c(zn, indus, chas, nox, rm, age, dis, rad, tax, ptratio, lstat, medv)) )
+plot(x_range, predict(logit1, type = 'response'))
+```
+
+### second model(logit - reduced)
+
+```{r}
+subset <- subset[-c(338, 457, 14, 62), ]
+
+logit2 <- glm(target ~ . -tax.t, data = subset, family = binomial)
 summary(logit2)
 ```
 
+```{r}
+# diagnostic plot
+plot(resid(logit2)~predict(logit2, type = 'link'))
+```
+
+```{r}
+# R^2
+1-logit2$deviance/logit2$null.deviance
+```
+
+### third model (probit)
+
+```{r}
+probit3 <- glm(target ~ . -tax.t, data = subset, family = binomial(link = 'probit'))
+summary(probit3)
+```
+
+```{r}
+# diagnostic plot
+plot(resid(probit3,type = 'deviance')~predict(probit3, type = 'link'))
+```
+
+```{r}
+# R^2
+1-probit3$deviance/probit3$null.deviance
+```
+
+## model selection
+
+since the first model the considered 'raw' because it doesn't do anything to variable, and $R^2$ is lower than the rest of two models, so we are not consider the first model.
+
+comparing the second and the third model, the p value is greater than statistically significant level, which means that the second and the third model have no significant difference. Choose either one would be fine in our case.
+
+```{r}
+anova(logit2, probit3)
+```
+
+## prediction
+
+```{r}
+eval <- read.csv('crime-evaluation-data_modified.csv')
+head(eval)
+```
