@@ -8,52 +8,58 @@ output:
     highlight: github
 ---
 
-## libraries
-
-```{r warning=FALSE, message=FALSE}
+```{r warning=FALSE, message=FALSE, include=FALSE}
 library(reshape2)
 library(ggplot2)
 library(dplyr)
 library(psych)
 library(MASS)
 library(car)
-library(Hmisc)
 library(corrplot)
+library(caret)
+library(performance) # overall model performace
+library(AICcmodavg) # model selection
+
 ```
 
-## explore data
+## Explore Data
+
+### stats
+
+The data set has 13 variables and 466 cases.
 
 ```{r}
 # load dataset
 data <- read.csv('crime-training-data_modified.csv')
-head(data)
+str(data)
 ```
 
-13 variables in total
-
-```{r}
-# number of variables in total
-names(data) %>% length()
-```
-
-from summary, there are no missing values reported but some predictors are skewed.
+From the summary, it does not seem to have missing value. However, variables like 'zn', 'indus', 'age' and so on are skewed, additionally, variable 'chas' and response variable should be factor type instead of int
 
 ```{r}
 # brief summary
 summary(data)
 ```
 
+### plots
+
+from boxplot, predictors are split by response variable, except 'nox', 'rad', and dummy variable 'chas' have no outliers, the rest of them have more/less outliers
+
 ```{r}
 # make box plot for all variables
 data.m <- melt(data, id.vars = 'target')%>% mutate(target = as.factor(target))
 head(data.m)
-ggplot(data.m, aes(x = variable, y = value, fill = target)) + geom_boxplot() + facet_wrap(~ variable, scales = 'free')
+ggplot(data.m, aes(x = variable, y = value, fill = target)) + geom_boxplot() + facet_wrap(~ variable, scales = 'free') + theme_classic()
 ```
+
+As I mentioned above, there are some variables skewed(not include dummy variable), some are bi-model, only 'rm' looks pretty normal.
 
 ```{r}
 # check normality and skewness
-data.m %>% ggplot(aes(x = value)) + geom_density() + facet_wrap(~variable, scale = 'free')
+data.m %>% ggplot(aes(x = value)) + geom_density() + facet_wrap(~variable, scale = 'free') + theme_classic()
 ```
+
+From correlation plot, variables between have somewhat relationship. However, from correlation scatter plot, it is very hard to tell which variable has which kind of relationship with others because all of points seems cluster together.
 
 ```{r warning=FALSE, message=FALSE}
 # correlation between predictors and response
@@ -61,32 +67,41 @@ par(mar = c(1,1,1,1))
 data%>% corPlot()
 ```
 
-the correlation between predictors doesn't appear to be linear
-
 ```{r}
-# correlation between predictors
+# shape of correlation
 pairs(data)
 ```
 
-## data transfromation
+## Data Transformation
 
-### linear regression(not valid)
-
-from the summary, the model only explains 61% of data, and there are more than one predictors don't have significant impact in predicting data, the added variable plot also showing the same.
-
-from residual plot, the variance of residual is not constant. QQ plot shows non-normality happen in the data. variance of error is not elliptically symmetric, it also shows some pattern
-
-As a result, this is a not a valid model for data
+### transform type
 
 ```{r}
-data.lm <- lm(target ~ ., data = data)
-summary(data.lm)
-plot(data.lm)
+data$chas <- as.factor(data$chas)
+data$target <- as.factor(data$target)
 ```
 
 ### transform variable
 
-```{r warning=FALSE, message=FALSE}
+corresponding library is required to perform the function, [reference is here](https://machinelearningmastery.com/pre-process-your-dataset-in-r/).
+
+use Box-Cox transformation as well as center and scale, just so variables are in the same scale, from the plot, we see that variables are more normal than raw data. Even though there are some variables still look problematic, let's stay with it now.
+
+```{r}
+# use transform data using boxcox, in the mean time center and scale them.
+preprocess <- preProcess(data %>% dplyr::select(-target), method = c('BoxCox', 'center', 'scale'))
+
+# get transformed data set
+trans.df <- predict(preprocess, data %>% dplyr::select(-target)) %>% mutate(target = as.factor(data$target))
+
+# plot density to check skewness and normality
+trans.df.m <- trans.df %>% mutate(target = as.factor(data$target)) %>% melt(id.vars = 'target')
+
+trans.df.m %>% ggplot(aes(x = value)) + geom_density() + facet_wrap(~variable, scale = 'free')
+```
+
+```{r warning=FALSE, message=FALSE, eval=FALSE, include=FALSE}
+# for my personal reference
 attach(data)
 back_transform <- function(y, lamda){
   if(lamda ==0L){
@@ -133,108 +148,144 @@ medv.t <- back_transform(medv, medv.pow)
 subset <- data.frame(target, nox.t, age.t, dis.t, rad.t, tax.t, ptratio.t, medv.t)
 ```
 
-```{r}
-# check variables after transformation
-hist.data.frame(subset)
-melt(subset, id.vars = 'target') %>% 
-  mutate(target = as.factor(target)) %>% 
-  ggplot(aes(x = value)) +
-  geom_density() +
-  facet_wrap(~variable, scale = 'free')+
-  labs(title = 'transfromed significant variables')
-```
-
 ## building model
+
+### split data into train set and test set
+
+```{r}
+set.seed(100)
+
+split.df <- trainTestPartition(trans.df, 0.7) # 70% is training, the rest will be testing
+
+train <- split.df$XyTr  # training set with label
+test <- split.df$XyTe  # testing test with label
+
+nrow(train)
+nrow(test)
+```
 
 ### logistic regression
 
-#### first model(logit - general)
+#### first model(full)
 
-from added variable plot, we see that there are some variables are not helping much in predicting response variable, therefore, I am going to reduce these variables.
+-   the distribution of deviance residuals looks pretty normal, there are more than one predictors are not statistically significant
 
-```{r}
-logit1 <- glm(target ~ . , data = data, family = binomial)
-summary(logit1)
-```
+-   AIC is 171.47
 
 ```{r}
-# diagnostic plot
-plot(resid(logit1)~predict(logit1, type = 'link'))
+m1 <- glm(target ~ . , data = train, family = binomial)
+summary(m1)
 ```
 
-```{r}
-# check outliers
-plot(logit1)
-```
-
-added variable plot prove that variables 'nox', 'age', 'dis', 'rad', 'tax', 'ptratio' and 'medv' have statistically significance in predicting response variable. Since these variable are either skewed or have outliers or both. I am going to transform these variable individually.
+-   the plot prove that predictors like 'zn', 'indus' and so on with slope near 0 are not so useful for predicting result
 
 ```{r}
 # added variable plot
-avPlots(logit1)
+par(mar = c(0.3, 0.3, 0.3, 0.3))
+avPlots(m1)
 ```
 
+-   from the model, we see that variable 'medv' and 'rm' happen to have collinearity
+
+-   from marginal plot, line for data and line for model is indistinguishable, it happens to be a valid model.
+
 ```{r}
-# R^2
-1-logit1$deviance/logit1$null.deviance
+# colinearity checking
+vif(m1)
+
+# validity check
+mmps(m1)
 ```
 
+### second model(reduced - remove medv, rm)
+
+To solve collinearity, I am going to remove variables cause such problem to form a new model.
+
+-   the distribution of deviance residuals still looks fine
+
+-   AIC increase to 176.22
+
 ```{r}
-# plot logistic regression again predictors
-x_range <- seq(0, 465, 0.1)
-generated_data <- as.data.frame(expand.grid(x=x_range, y=c(zn, indus, chas, nox, rm, age, dis, rad, tax, ptratio, lstat, medv)) )
-plot(x_range, predict(logit1, type = 'response'))
+m2 <- update(m1, .~. -medv -rm)
+summary(m2)
+
 ```
 
-### second model(logit - reduced)
+-   there is no collinearity
+
+-   model is valid
 
 ```{r}
-subset <- subset[-c(338, 457, 14, 62), ]
+# colinearity
+vif(m2)
 
-logit2 <- glm(target ~ . -tax.t, data = subset, family = binomial)
-summary(logit2)
+# mmps
+mmps(m2)
 ```
 
+### third model (stepwise based on m1)
+
+stepwise approach helps to find all subset of proper models and pick the lowest AIC score(which means the best model it computes). Therefore, there is no need for me to do backward elimination and forward selection.
+
+-   the final model it picks has AIC score of 162.05
+
 ```{r}
-# diagnostic plot
-plot(resid(logit2)~predict(logit2, type = 'link'))
+m3 <- step(update(m1, .~.))
+summary(m3)
 ```
 
+-   there is no colinearity and model is valid
+
 ```{r}
-# R^2
-1-logit2$deviance/logit2$null.deviance
+# collinearity
+vif(m3)
+
+# validity
+mmps(m3)
 ```
 
-### third model (probit)
+#### Forth model(stepwise based on m2)
+
+m1 has the full model, m2 is reduced model.
+
+-   the best model computed by step() function has AIC score of 171.71 which is very similar to m1
 
 ```{r}
-probit3 <- glm(target ~ . -tax.t, data = subset, family = binomial(link = 'probit'))
-summary(probit3)
+m4 <- step(update(m2, .~.))
+summary(m4)
 ```
 
-```{r}
-# diagnostic plot
-plot(resid(probit3,type = 'deviance')~predict(probit3, type = 'link'))
-```
+-   no colinearity and model is still valid
 
 ```{r}
-# R^2
-1-probit3$deviance/probit3$null.deviance
+# colinearity check
+vif(m4)
+
+# validity check
+mmps(m4)
 ```
 
 ## model selection
 
-since the first model the considered 'raw' because it doesn't do anything to variable, and $R^2$ is lower than the rest of two models, so we are not consider the first model.
-
-comparing the second and the third model, the p value is greater than statistically significant level, which means that the second and the third model have no significant difference. Choose either one would be fine in our case.
+based on the result from AICc, and model performance, I am going to choose model3
 
 ```{r}
-anova(logit2, probit3)
+model_list <- list(m1, m2, m3, m4)
+aictab(model_list)
+```
+
+```{r}
+compare_performance(m1, m2, m3, m4, rank = T)
 ```
 
 ## prediction
 
 ```{r}
-eval <- read.csv('crime-evaluation-data_modified.csv')
-head(eval)
+
+pred <- predict(m3, test)
+pred[pred>0.5] = 1
+pred[pred<0.5] = 0
+pred <- pred %>% as.factor()
+
+confusionMatrix(pred, test$target)
 ```
