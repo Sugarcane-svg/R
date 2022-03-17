@@ -1,6 +1,6 @@
 ---
 title: "621-hw3"
-author: "Document Author"
+author: "Jie Zou, Euclid Zhang, Leticia Cancel, Joseph Connolly, Dennis Pong"
 date: "`r Sys.Date()`"
 output:
   prettydoc::html_pretty:
