@@ -1,6 +1,6 @@
 ---
 title: "621-hw3"
-author: "Jie Zou, Euclid Zhang, Leticia Cancel, Joseph Connolly, Dennis Pong"
+author: "Jie Zou, Euclid Zhang, Leticia Cancel, Joseph Connolly, Chi Pong"
 date: "`r Sys.Date()`"
 output:
   prettydoc::html_pretty:
@@ -19,6 +19,7 @@ library(corrplot)
 library(caret)
 library(performance) # overall model performace
 library(AICcmodavg) # model selection
+library(bestglm)
 
 ```
 
@@ -74,20 +75,13 @@ pairs(data)
 
 ## Data Transformation
 
-### transform type
-
-```{r}
-data$chas <- as.factor(data$chas)
-data$target <- as.factor(data$target)
-```
-
 ### transform variable
 
 corresponding library is required to perform the function, [reference is here](https://machinelearningmastery.com/pre-process-your-dataset-in-r/).
 
 use Box-Cox transformation as well as center and scale, just so variables are in the same scale, from the plot, we see that variables are more normal than raw data. Even though there are some variables still look problematic, let's stay with it now.
 
-```{r}
+```{r warning=FALSE, message=FALSE}
 # use transform data using boxcox, in the mean time center and scale them.
 preprocess <- preProcess(data %>% dplyr::select(-target), method = c('BoxCox', 'center', 'scale'))
 
@@ -95,9 +89,9 @@ preprocess <- preProcess(data %>% dplyr::select(-target), method = c('BoxCox', '
 trans.df <- predict(preprocess, data %>% dplyr::select(-target)) %>% mutate(target = as.factor(data$target))
 
 # plot density to check skewness and normality
-trans.df.m <- trans.df %>% mutate(target = as.factor(data$target)) %>% melt(id.vars = 'target')
+trans.df.m <- trans.df %>% melt(id.vars = 'target')
 
-trans.df.m %>% ggplot(aes(x = value)) + geom_density() + facet_wrap(~variable, scale = 'free')
+trans.df.m %>% ggplot(aes(x = value)) + geom_density() + facet_wrap(~variable, scales = 'free') + theme_classic()
 ```
 
 ```{r warning=FALSE, message=FALSE, eval=FALSE, include=FALSE}

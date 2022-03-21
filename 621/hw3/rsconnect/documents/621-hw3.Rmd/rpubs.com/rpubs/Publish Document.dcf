@@ -1,0 +1,11 @@
+name: Publish Document
+title:
+username:
+account: rpubs
+server: rpubs.com
+hostUrl: rpubs.com
+appId: https://api.rpubs.com/api/v1/document/879312/a2b023b4ca2a492d896a3a461af95f9a
+bundleId: https://api.rpubs.com/api/v1/document/879312/a2b023b4ca2a492d896a3a461af95f9a
+url: http://rpubs.com/Sugarcane_phz/879312
+when: 1647578841.45582
+lastSyncTime: 1647578841.45584
