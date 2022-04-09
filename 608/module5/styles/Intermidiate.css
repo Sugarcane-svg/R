@@ -1,0 +1,26 @@
+body {
+    background-color: white;
+}
+
+li a {
+    color: white;
+}
+
+li a:hover {
+    background-color: #417175;
+    color: #08282b;
+}
+
+ul {
+    background-color: #08282b;
+}
+
+p {
+    color: #08282b;
+}
+
+h3 {
+    text-align: center;
+    color: #08282b;
+    margin-top: 20px;
+}

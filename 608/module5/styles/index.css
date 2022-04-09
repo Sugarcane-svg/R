@@ -1,0 +1,48 @@
+body {
+    height: 100vh;
+    background-color: #08282b;
+}
+
+h1 {
+    text-align: center;
+    margin-top: 15%;
+    color: #098f9c;
+}
+
+
+
+ul {
+    list-style-type: none;
+    overflow: hidden;
+    text-align: center;
+    list-style-position: inside;
+    margin-left: 25%;
+    margin-right: 25%;
+    padding-left: 15%;
+    padding-right: 15%;
+}
+
+li {
+    display: inline;
+    float: left;
+    padding: 2%;
+}
+
+li a {
+    display: block;
+    color: #6baab0;
+    text-align: center;
+    text-decoration: none;
+    margin: 10px;
+    padding: 5px;
+}
+
+li a:hover {
+    background-color: #417175;
+    color: #08282b;
+}
+
+p {
+    text-align: center;
+    color: #2e5357;
+}
