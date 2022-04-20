@@ -19,7 +19,7 @@ st.subheader("Display Data")
 st.text('Highest Holywood Grossing Movies Dataset')
 
 # read data from csv file
-data = pd.read_csv("Highest_Holywood_Grossing_Movies.csv", index_col=0)
+data = pd.read_csv("https://raw.githubusercontent.com/Sugarcane-svg/R/main/608/final_project/Highest_Holywood_Grossing_Movies.csv", index_col=0)
 
 # 1. display data in website
 st.dataframe(data)
