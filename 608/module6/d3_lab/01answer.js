@@ -5,7 +5,7 @@ d3.csv('ue_industry.csv', data => {
         .domain(d3.extent(data, d => +d.index))
         .range([20, 1180]);
 
-    console.log(xScale(data.index))
+    // console.log(xScale(data.index))
 
     const yScale = d3.scaleLinear()
         .domain(d3.extent(data, d => +d.Agriculture))
