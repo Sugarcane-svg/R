@@ -1,0 +1,86 @@
+---
+title: "Streamgraph Usgae"
+author: "Jie Zou"
+date: "`r Sys.Date()`"
+output:
+  prettydoc::html_pretty:
+    theme: architect
+    highlight: github
+---
+
+## My Thoughts
+
+The first time that I've heard about Stream-graph was in 608 class where we were doing live coding demo to figure out how to use d3 to achieve plotting data in the webpage few days ago. I was confused at that time because compared to other intuitive graphs, stream-graph was not easy to interpret. I understand that different colors shown represented distinct categories. Then, what about the squiggly shape? What about the width of each category? Meanwhile, I also wondered why we need to use stream-graph and when the situation is where stream-graph has advantages over other plots and how to make a stream-graph in R.
+
+By carrying these questions, I started doing some general research about it and find that it is nothing more than a basic **stacked area chart**, with fancier design and presentation. It shows the **changes in a numeric variable against another numeric variable**, in which I would say that it shows some relationships between x-axis and y-axis. Moreover, instead of study individual group using stream-graph, it is better to use it while studying **relative proportions of the whole**. According to [data to viz](https://www.data-to-viz.com/graph/streamgraph.html), *"it is very hard to substract the height of other groups at each time point".*
+
+# Make A Stream Graph
+
+```{r libraries, include=FALSE}
+library(reshape2)
+library(dplyr)
+library(stringr)
+library(ggstream)
+library(ggplot2)
+```
+
+### Data
+
+```{r read_data, include=FALSE}
+d <- read.csv('countries_gdp_1960_2020.csv')
+```
+
+**only 1 missing value, it can be filtered out**
+
+```{r summarize_data, echo=FALSE}
+summary(d)
+```
+
+```{r include=FALSE}
+# remove case which is not country
+d <- d %>% filter(!Country.Name %in% c("St. Vincent and the Grenadines", "World", "Upper middle income","Sub-Saharan Africa (IDA & IBRD countries)", "South Asia (IDA & IBRD)","Latin America & the Caribbean (IDA & IBRD countries)","East Asia & Pacific (IDA & IBRD countries)","Sub-Saharan Africa","Sub-Saharan Africa (excluding high income)","South Asia","Post-demographic dividend","Pre-demographic dividend","OECD members","North America","Middle income","Late-demographic dividend","Low & middle income","Lower middle income","St. Kitts and Nevis","IDA only","IDA blend","IDA total","IDA & IBRD total","IBRD only","Heavily indebted poor countries (HIPC)","Hong Kong SAR, China","High income","East Asia & Pacific","Early-demographic dividend","East Asia & Pacific (excluding high income)","Caribbean small states","Central African Republic"))
+```
+
+**Data Before Reshape**
+
+```{r reshape_data_before, echo=FALSE}
+d.copy <- d %>% na.omit()
+head(d.copy)
+```
+
+**Data After Reshape**
+
+```{r reshape_data, echo=FALSE}
+d.reshape <- d.copy %>% 
+  melt(id.vars = c('Country.Name', 'Country.Code'),
+       variable.name = "year",
+       value.name = "gdp")
+
+d.reshape["year"] <- lapply(d.reshape["year"], as.character) %>% purrr::map(function(x) str_remove(x, "X"))
+```
+
+```{r reshape_data_after, echo=FALSE}
+d.reshape$year <- as.integer(d.reshape$year)
+head(d.reshape)
+```
+
+### Plot Top 5 Countries
+
+```{r echo=FALSE}
+top_5_countries <- d.reshape %>% filter(Country.Name %in% c("United States","Euro area","Japan","China", "United Kingdom"))
+ggplot(top_5_countries, aes(x = year, y=gdp, fill = Country.Name)) + geom_stream(type = "ridge") +
+  theme_classic()+
+  labs(title = "gdp growth aross years in listed countries")
+```
+
+### Plot Top 5 countries in Proportion(gdp)
+
+```{r echo=FALSE}
+ggplot(top_5_countries, aes(x = year, y=gdp, fill = Country.Name)) + geom_stream(type = "proportional") +
+  theme_classic()+
+  labs(title = "gdp proportion in 5 countries")
+```
+
+## Conclusion
+
+Most of value in reality is not negative, therefore, setting stream-graph type into "mirror"(default) is not desirable in this case, "ridge" will be preferred because its lower bound is 0 and upper bound is unlimited. In graph "gdp growth aross years in listed countries", United State still shows the largest gdp growth; China does not have any records in the data showing growth of GDP, or its GDP is super low. However, the proportional graph is just for me to show how the proportional stream-graph looks like. It is misleading and confusing around 1960 in the plot, So I will not draw any conclusions on this plot.

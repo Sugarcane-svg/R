@@ -1,0 +1,206 @@
+---
+title: "Blog2: Feature engineering and Tidymodel"
+author: "Jie Zou"
+date: "`r Sys.Date()`"
+output:
+  prettydoc::html_pretty:
+    theme: architect
+    highlight: github
+---
+
+## My Thought
+
+Before working in Final project, I did not realize that feature engineering is important. After I read some stat documents, I found out that feature engineering is super useful to extract/create potentials to enhance future analysis and modeling. In addition, I've never use tidymodel before, I would like to give it a shot to see if I would have different insights.
+
+## Data
+
+```{r warning=FALSE, include=FALSE}
+library(ggplot2)
+library(tidyr)
+library(dplyr)
+library(purrr)
+library(caret)
+library(tidymodels)
+library(recipes)
+```
+
+The data that I got is from [Kaggle](<https://www.kaggle.com/datasets/ayessa/salary-prediction-classification/code?select=salary.csv>).
+
+-   I am only interested in the salary spreads in United State, therefore, some other observations are omited
+
+```{r echo=FALSE}
+d <- read.csv("salary.csv")
+# take salary only in United states
+d.copy <- d %>% filter(native.country == " United-States") %>% select(-c(native.country))
+glimpse(d.copy)
+```
+
+## Distribution of Numerical Variables
+
+**Interpretation of Interesting variables**
+
+-   age: the peak for salary less/equal than 50 is around 25 year-old, however the peak for higher salary is around 40-50 year-old. Which means that more of 25 year-old make less/equal to 50K and more of 40-50 will make more than that.
+
+-   education.num: has several peaks in both level of salaries. Before 13, most of them make less/equal to 50K, when education.num is greater than 13, they make more than 50K.
+
+-   hour.per.week: majority individuals who work under 40-42 hours per week will have salaries under 50K. Pass the threshold, it seems like the more time you spend, the more you make.
+
+```{r echo=FALSE, fig.width=10, fig.height=9}
+d.copy %>% 
+  keep(is.integer) %>% 
+  cbind(salary = d.copy$salary) %>% 
+  gather("numeric_val", "value", -salary) %>% 
+  ggplot(aes(x = value, color = salary))+
+    geom_density()+
+    facet_wrap(.~numeric_val, scales = "free") +
+    theme_classic()
+```
+
+## Distribution of Categorical Variables
+
+**Interpretation of Interesting variables**
+
+-   education: like education.num mentioned previous, the trends are clear.
+
+-   marital.status: It shows that no matter which status, the population which make less than 50K is dominant. Besides, stable marital status will have less less difference in salary
+
+-   occupation: other than executive/management, most of people with other occupation earn less than 50K
+
+-   race: clearly white and other race has difference between salaries, but the sample in race is imbalanced. No I cannot draw conclusions in general. However, based on the data obtained, most of white race make less than 50K.
+
+-   sex: from the plot, the population of female who make less/equal to 50K less than the population of male. Meanwhile, the population of female who make more than 50K is less than the population of male. It could be less female workers in the dataset, or it could be that females make less in both situation.
+
+-   workclass: other than self employee company, the ratio of both salary level is dominant by less/equal to 50K
+
+```{r echo=FALSE, fig.height=10, fig.width=10}
+d.copy %>% 
+  keep(is.character) %>% 
+  gather("var", 'val', -salary) %>% 
+  ggplot(aes(x = val, fill = salary)) + 
+    geom_bar(position = position_dodge()) +
+    facet_wrap(~var, scales = "free") + 
+    theme_classic() +
+    theme(axis.text.x = element_text(angle = 90))
+```
+
+## Feature Engineering
+
+-   since education and education.num represent basically the same thing, I am going to keep one between two. In addition, it clearly shows that individual who has degree higher than Bachelors(in education) tend to make more than 50K, which correspond to >13(in education.num)
+
+-   occupation and work class is somewhat overlap each other, and there should be more occupation type in reality, therefore, workclass is kept instead of occupations. Besides, workclass variable clearly shows that self own company will make over 50K.
+
+-   Although family and partner relationship will have impact on individuals both mentally and physically, relationship brings salary raise is rare case in general. So, I do not need such variables as well.
+
+```{r echo=FALSE}
+df <- d.copy %>% 
+  mutate(race = ifelse(d.copy$race == " White","white","not_white"),
+         edu_level = ifelse(d.copy$education.num > 13, "above bachelors", "below/equal bachelors"),
+         work_level = ifelse(d.copy$workclass == " Self-emp-inc", "self emp", "worker")) %>% 
+  select(-c(marital.status, relationship, occupation, education, education.num, workclass)) %>% 
+  mutate_if(is.character, as.factor)
+
+glimpse(df)
+```
+
+## Collinearity in Numeric Variables
+
+there is no multi-colinearity happen in the dataset.
+
+
+```{r echo=FALSE, fig.height=5, fig.width=5}
+temp <- df %>% select(age, fnlwgt, capital.gain, capital.loss, hours.per.week)
+corrplot::corrplot(cor(temp), method = 'number', type = 'lower', diag = FALSE)
+```
+
+
+
+## Target Variable Balance Check
+
+The spread of target variable is not balanced, however, we should keep as it is because in reality, the ratio of both salary level is not going to be the same. Therefore, we reserved the ratio for data splitting.
+
+```{r echo=FALSE}
+df %>% select(salary) %>% count(salary) %>% mutate(ratio = n/nrow(df))
+```
+
+## Create partitions
+
+```{r include=FALSE}
+splits <- initial_split(df, strata = salary)
+train.df <- training(splits)
+test.df <- testing(splits)
+test.label <- test.df$salary
+test.df <- test.df %>% select(-c(salary))
+```
+**Dimension of training set**
+```{r echo=FALSE}
+dim(train.df)
+```
+**Dimension of testing set**
+```{r echo=FALSE}
+dim(test.df)
+```
+
+## modeling
+
+```{r echo=TRUE}
+# create recipe
+re <- 
+  recipe(salary ~ ., data = train.df) %>% 
+  step_dummy(all_nominal_predictors())
+
+# create model type
+log_mod <- 
+  logistic_reg() %>% 
+  set_engine("glm")
+  
+# piece recipe and model
+df_wkfl <- 
+  workflow() %>% 
+  add_model(log_mod) %>% 
+  add_recipe(re)
+```
+
+```{r echo=TRUE, warning=FALSE}
+# fit data using workflow
+df_fit <- 
+  df_wkfl %>% 
+  fit(data = train.df)
+```
+All features are significant based on p-value
+```{r echo=FALSE}
+df_fit %>% 
+  extract_fit_parsnip() %>% 
+  tidy()
+```
+
+## Model Performance
+
+Based on the stats, I would say that the model is good.
+
+**Training accuracy**
+```{r echo=FALSE}
+train_pred <- 
+  predict(df_fit, train.df) %>% 
+  bind_cols(predict(df_fit, train.df, type = "prob")) %>% 
+  bind_cols(train.df %>% select(salary))
+
+train_pred %>% 
+  accuracy(truth = salary, .pred_class)
+```
+**Testing accuracy**
+```{r echo=FALSE}
+test_pred <- predict(df_fit, test.df) %>% 
+  bind_cols(predict(df_fit, test.df, type = "prob")) 
+
+test_pred %>% 
+  accuracy(truth =test.label, .pred_class)
+```
+
+```{r}
+# confusion matrix
+confusionMatrix(test.label, test_pred$.pred_class)
+```
+
+## Conclusion
+
+Tidymodel split modeling into parts which is different from the traditional way of building models where all things is calculated in once. Sometimes, one wants to reuse some of parts in other model, it is convenient to use Tidymodel instead. Otherwise, any changes in the model should be re-computed by the traditional way, it consumes the memory and low down the computer. For simple modeling, I would still recommend the traditional one because it saves coding time.
