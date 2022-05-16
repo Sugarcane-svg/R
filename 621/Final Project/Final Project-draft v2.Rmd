@@ -1,0 +1,555 @@
+---
+title: "DATA_621_Final_Project"
+author: "Chi Pong, Euclid Zhang, Jie Zou, Joseph Connolly, LeTicia Cancel"
+date: "4/19/2022"
+output:
+  html_document:
+    df_print: paged
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r message=FALSE, warning=FALSE}
+library("stringr")
+library("dplyr")
+library("tidyr")
+
+#library("arm")
+library("pROC")
+library("car")
+library("caret")
+
+library("reshape2")
+library("patchwork")
+```
+
+Note:
+
+1.  No user is using multiple device.
+2.  Users stay in the same location.
+3.  All songs are finished before going to the next song.
+4.  There is no "remove from Playlist" record.
+5.  Only users who canceled the service are considered as churned. Free users with no activities are not considered as churned.
+6.  We only have data from 10/1/2018 to 12/1/2018
+
+```{r}
+#setwd("/Users/dpong/Data 621/Final_Project/Datasets")
+setwd("~/Library/CloudStorage/OneDrive-CityUniversityofNewYork/621/final_churn_modeling")
+df <- read.csv("sparkify-medium.csv", stringsAsFactors = FALSE, row.names=1)
+```
+
+The time of registration for the records of a few users are incorrect (the time of registration is after the user's first log in). Correct the time of registration using the "Submit Registration" page and the session ID
+
+```{r}
+regist_df <- filter(df,df$page=="Submit Registration")
+
+for (i in c(1:nrow(regist_df))) {
+  temp_df <- df %>% 
+                filter(sessionId==regist_df$sessionId[i]) %>%
+                filter(!is.na(userId)) %>% 
+                mutate(delta=abs(ts-regist_df$ts[i])) %>% 
+                arrange(delta,desc=FALSE)
+
+  df[!is.na(df$userId) & df$userId==temp_df$userId[1],"registration"] <- regist_df$ts[i]
+}
+```
+
+Filter out the guest records (the ones without a userId)
+
+```{r}
+df <- filter(df,!is.na(userId))
+```
+
+Simplify the user Agent to represent the type of device that the user is using.
+
+```{r}
+df$userAgent[str_detect(df$userAgent,"Macintosh")] <- "Macintosh"
+df$userAgent[str_detect(df$userAgent,"iPad")] <- "iPad"
+df$userAgent[str_detect(df$userAgent,"iPhone")] <- "iPhone"
+df$userAgent[str_detect(df$userAgent,"Windows")] <- "Windows"
+df$userAgent[str_detect(df$userAgent,"Linux")] <- "Linux"
+
+# add location
+df$location <- str_replace(str_extract(df$location, ", .+"), ", ", "")
+```
+
+Select a subset of the activities that may be significant predictors. Activities such as going to the home page or setting page that seem to be insignificant are excluded.
+
+```{r}
+# selected_pages <- c("NextSong","Roll Advert","Add Friend","Thumbs Up",
+#                     "Add to Playlist", "Upgrade", "Submit Upgrade", "Error",
+#                     "Thumbs Down","Cancel", "Cancellation Confirmation",
+#                     "Downgrade", "Submit Downgrade","Submit Registration")
+# df <- df[df$page %in% selected_pages,]
+```
+
+Convert some categorical variables in to factors.
+
+```{r}
+factor_columns <- c("page","auth","method","status","level","gender","userAgent","location") # add last variable
+
+df[factor_columns] <- lapply(df[factor_columns], factor)
+```
+
+Remove some variables that are not used in our analysis
+
+```{r}
+df$home <- NULL
+df$method <- NULL
+df$status <- NULL
+df$itemInSession <- NULL
+#df$location <- NULL # we need location to see if this feature affects user churned
+df$lastName <- NULL
+df$firstName <- NULL
+df$auth <- NULL
+```
+
+Create a new variable indicating whether it is a song that the user never listened before.
+
+```{r}
+df <- arrange(df, ts,desc=FALSE)
+
+df$user_song <- paste0(df$userId, df$artist, df$song)
+temp <- df %>% group_by(user_song) %>% mutate(count=row_number())
+df$new_song <- temp$count
+temp <- NULL
+df$user_song <- NULL
+df$new_song[df$new_song > 1] <- 0
+df$new_song[is.na(df$song)] <- NA
+```
+
+```{r}
+page_df <- df %>% group_by(userId) %>% 
+  count(page) %>% 
+  spread(page, n, fill = 0)
+
+#Cancel column is identical to "Cancellation Confirmation" so it is removed
+page_df$Cancel <- NULL
+
+page_df[,2:ncol(page_df)] <- sapply(page_df[,2:ncol(page_df)], as.integer)
+page_df$Total_Activities <- apply(page_df[,2:ncol(page_df)], 1, sum)
+
+page_df
+```
+
+```{r message=FALSE, warning=FALSE}
+user_df <- df %>% filter(!is.na(song)) %>% 
+  arrange(ts, desc=FALSE) %>% 
+  group_by(userId) %>% 
+  summarise(active_sessions=n_distinct(sessionId),
+            new_songs_listened=sum(new_song),
+            registration=first(registration),
+            end_level=last(level),
+            gender=first(gender),
+            userAgent=first(userAgent),
+            location =first(location))
+user_df
+```
+
+```{r}
+#Euclid: Fix the bug by sorting the user Id first
+df <- df %>% arrange(userId, desc=FALSE)
+
+obs_df <- data.frame(userId=unique(df$userId))
+obs_df$start <- ifelse(user_df$registration > 1538352000000, user_df$registration, 1538352000000)
+obs_df$end <- 1543622400000
+temp <- filter(df, page == "Cancellation Confirmation")
+obs_df$end[obs_df$userId %in% temp$userId] <- temp$ts
+
+# obs_df
+```
+
+```{r}
+prepared_df <- merge(obs_df, user_df, by=c("userId")) %>% 
+                arrange(userId)
+  
+prepared_df <- merge(prepared_df, page_df, by=c("userId")) %>% 
+                arrange(userId)
+
+names(prepared_df) <- str_replace_all(names(prepared_df), " ", "_")
+
+prepared_df
+```
+
+```{r}
+lookback_window <- 14
+# corrected the mistake by Euclid. Replaced 100 with 1000
+sub_obs_time_frame <- lookback_window * 24 * 3600 * 1000
+```
+
+```{r}
+df <- merge(df, prepared_df[c("userId","start","end")], by=c("userId"))
+df
+```
+
+```{r}
+df_recent <- filter(df, ts >= end - sub_obs_time_frame)
+df_oldest <- filter(df, ts <= start + sub_obs_time_frame)
+```
+
+```{r}
+temp <- df_recent %>% 
+        group_by(userId) %>% 
+        summarise(recent_total_act = n())
+
+prepared_df <- merge(prepared_df, temp, by=c("userId"), all.x=TRUE)
+
+temp <- df_recent %>%  filter(page == "NextSong") %>% 
+                        group_by(userId) %>% 
+                        summarise(recent_total_song = n())
+
+prepared_df <- merge(prepared_df, temp, by=c("userId"), all.x=TRUE)
+
+temp <- df_oldest %>% 
+        group_by(userId) %>% 
+        summarise(oldest_total_act = n())
+
+prepared_df <- merge(prepared_df, temp, by=c("userId"), all.x=TRUE)
+
+temp <- df_oldest %>%  
+        filter(page == "NextSong") %>% 
+        group_by(userId) %>% 
+        summarise(oldest_total_song = n())
+
+prepared_df <- merge(prepared_df, temp, by=c("userId"), all.x=TRUE)
+
+temp <- NULL
+#Euclid: fix the records with no actitivies
+prepared_df[is.na(prepared_df)] <- 0
+prepared_df
+
+```
+
+Calculation of defined features that can be used as predictors for identifying users that are to churn.
+
+```{r}
+train_df <- dplyr::select(prepared_df,userId,end_level,gender,userAgent, location) # add location
+train_df$churn <- as.factor(prepared_df$Cancellation_Confirmation)
+```
+
+```{r}
+
+prepared_df$duration_in_hours <- (prepared_df$end - prepared_df$start)/3600/1000
+
+train_df$tot_act_phour <- prepared_df$Total_Activities/prepared_df$duration_in_hours
+train_df$songs_phour <- prepared_df$NextSong/prepared_df$duration_in_hours
+train_df$tot_tu_phour <- prepared_df$Thumbs_Up/prepared_df$duration_in_hours
+train_df$tot_td_phour <- prepared_df$Thumbs_Down/prepared_df$duration_in_hours
+train_df$frds_added_phour <- prepared_df$Add_Friend/prepared_df$duration_in_hours
+train_df$tot_add2PL_phour <- prepared_df$Add_to_Playlist/prepared_df$duration_in_hours
+train_df$HP_visits_phour <- prepared_df$Home/prepared_df$duration_in_hours
+#Euclid: Remove duplicated code
+#prepared_df$HP_visits_phour <- prepared_df$Home/prepared_df$duration_in_hours
+train_df$tot_ads_phour <- prepared_df$Roll_Advert/prepared_df$duration_in_hours
+train_df$tot_errs_phour <- prepared_df$Error/prepared_df$duration_in_hours
+#Euclid: keep upgrade and downgrade separated
+#train_df$upgrade_downgrades_phour <- (prepared_df$Submit_Upgrade + prepared_df$Submit_Downgrade)/prepared_df$duration_in_hours
+train_df$upgrades_phour <- prepared_df$Submit_Upgrade/prepared_df$duration_in_hours
+train_df$downgrades_phour <- prepared_df$Submit_Downgrade/prepared_df$duration_in_hours
+
+#train_df$upgrade_downgrades <- (prepared_df$Submit_Upgrade + prepared_df$Submit_Downgrade)
+
+train_df$song_ratio <- prepared_df$NextSong / prepared_df$Total_Activities
+train_df$new_songs_ratio <- prepared_df$new_songs_listened / prepared_df$NextSong
+
+#prepared_df$pos_negative_ratio <- prepared_df$Thumbs_Up/(prepared_df$Thumbs_Down + 0.0001)
+#Euclid: Change to
+train_df$pos_negative_ratio <- (prepared_df$Thumbs_Up+1)/(prepared_df$Thumbs_Down+1)
+
+#Euclid: calculate the difference between recent and oldest activities
+# train_df$tot_recent_act_phour  <- prepared_df$recent_total_act / lookback_window / 24
+# train_df$tot_oldest_act_phour  <- prepared_df$oldest_total_act / lookback_window / 24
+# train_df$recent_songs_phour  <- prepared_df$recent_total_song / lookback_window / 24
+# train_df$oldest_songs_phour  <- prepared_df$oldest_total_song / lookback_window / 24
+train_df$diff_act_phour <- (prepared_df$recent_total_act-prepared_df$oldest_total_act) / lookback_window / 24
+train_df$diff_song_phour <- (prepared_df$recent_total_song-prepared_df$oldest_total_song) / lookback_window / 24
+
+
+train_df
+
+```
+
+```{r}
+# Calculation of user's average number of events per session
+session_avg <- df %>% 
+                group_by(userId, sessionId) %>%
+                summarise(events = n(), .groups = 'drop') %>%
+                group_by(userId) %>%
+                summarise(avg_events_per_session = mean(events)) 
+
+
+session_avg
+```
+
+```{r}
+# Calculation of user's average session duration
+
+session_avg_length = df  %>% 
+                    group_by(userId, sessionId) %>%
+                    arrange(ts, .by_group = TRUE) %>% 
+                    # filter(userId==3) %>%
+                    summarise( session_begin_ts = min(ts), 
+                               session_end_ts = max(ts), 
+                               .groups = 'drop') %>% 
+                    group_by(userId) %>% 
+                    summarise( avg_session_duration = mean(session_end_ts-session_begin_ts))
+
+session_avg_length
+```
+
+```{r}
+# Calculations to obtain user's average number of songs played between home visits
+window_home_songs  <-  df  %>% 
+                       group_by(userId) %>%
+                       arrange(ts, .by_group = TRUE) %>% 
+                       mutate(home_visits = cumsum(case_when( page == 'Home' ~ 1, TRUE ~ 0))) %>%
+                       # summarise(home_button = case_when( page == 'Home' ~ 1, TRUE ~ 0), .groups = 'drop') %>%
+                       group_by(userId, home_visits) %>%
+                       summarise(nsongs = cumsum(sum(case_when (page == 'NextSong' ~ 1, TRUE ~ 0))), 
+                                 .groups = 'drop')  %>%
+                       group_by(userId) %>%
+                       # filter(userId==4) %>%
+                       summarise(avg_songs_btwn_home = mean(nsongs))
+
+window_home_songs
+```
+
+```{r}
+# Calculations to obtain user's average number of songs played between ads played
+window_ads_songs  <-  df  %>% 
+                       group_by(userId) %>%
+                       arrange(ts, .by_group = TRUE) %>% 
+                       mutate(ads_played = cumsum(case_when( page == 'Roll Advert' ~ 1, TRUE ~ 0))) %>%
+                       # summarise(home_button = case_when( page == 'Home' ~ 1, TRUE ~ 0), .groups = 'drop') %>%
+                       group_by(userId, ads_played) %>%
+                       summarise(nsongs = cumsum(sum(case_when (page == 'NextSong' ~ 1, TRUE ~ 0))), 
+                                 .groups = 'drop')  %>%
+                       group_by(userId) %>%
+                       # filter(userId==4) %>%
+                       summarise(avg_songs_btwn_ads = mean(nsongs))
+
+window_ads_songs
+```
+
+```{r}
+# analysis of ads playing by level
+
+df  %>% 
+                       group_by(userId) %>%
+                       arrange(ts, .by_group = TRUE) %>% 
+                       mutate(ads_played = cumsum(case_when( page == 'Roll Advert' ~ 1, TRUE ~ 0))) %>%
+                       group_by(level, ads_played) %>%
+                       summarise (sum=n() , .groups = 'drop' )
+```
+
+Incorporating all the newly defined business metrics into the main data.frame (prepared_df)
+
+```{r}
+#Keep the same data frame to save memory
+
+train_df <- merge(train_df, session_avg, by=c("userId")) %>% 
+                arrange(userId)
+  
+train_df <- merge(train_df, session_avg_length, by=c("userId")) %>% 
+                arrange(userId)
+
+train_df <- merge(train_df, window_home_songs, by=c("userId")) %>% 
+                arrange(userId)
+  
+train_df <- merge(train_df, window_ads_songs, by=c("userId")) %>% 
+                arrange(userId)
+train_df
+
+```
+
+# EDA
+<<<<<<< HEAD
+
+### Distributions
+
+By looking at these distribution plots with different constraints. We find:
+
+-   Users with subscription are more likely to churn
+
+-   The most frequent activity that users made is going to next song
+
+-   California has most churned user
+
+-   Males are more likely to churn compared to females
+
+**Distribution of level**
+
+=======
+**Distribution of level**
+>>>>>>> origin/master
+```{r}
+ggplot(train_df %>% filter(churn == 1), aes(x = end_level)) + 
+    geom_bar(position = position_dodge()) + 
+    theme_classic() + 
+    labs(x = "level of user",
+         title = "distribution of level"
+         )
+```
+
+**Distribution of in app activities**
+<<<<<<< HEAD
+
+=======
+>>>>>>> origin/master
+```{r}
+ggplot(df, aes(x = page)) + 
+    geom_bar() + 
+    theme_classic() + 
+    theme(axis.text.x = element_text(angle = 90))+
+    labs(x = "user activities",
+         title = "distribution of user activities(original data)")
+```
+<<<<<<< HEAD
+
+**Number of churn by states**
+
+```{r}
+ggplot(train_df %>% filter(as.factor(churn)== 1), aes(x=forcats::fct_infreq(location))) + 
+=======
+**Number of churn by states**
+```{r}
+ggplot(train_df %>% filter(as.factor(churn)== 1), aes(x=fct_infreq(location))) + 
+>>>>>>> origin/master
+    geom_bar()+
+    theme_classic() + 
+    theme(axis.text.x = element_text(angle = 90)) + 
+    labs(x = "state", 
+         y = "number of people churned", 
+         title = 'churn by states'
+         )
+```
+
+**Churn ratio by gender**
+<<<<<<< HEAD
+
+=======
+>>>>>>> origin/master
+```{r}
+ggplot(train_df %>% filter(churn == 1), aes(x = gender))+
+  geom_bar(na.rm = T) +
+  theme_classic() + 
+  labs(title = "churn ratio by gender")
+```
+
+<<<<<<< HEAD
+### Relations
+
+**Collinearity Check for Numeric Variables**
+
+=======
+**Collinearity Check for Numeric Variables**
+>>>>>>> origin/master
+```{r}
+correlation = cor(train_df %>% purrr::keep(is.numeric) %>% select(-c(userId)), use = 'pairwise.complete.obs')
+corrplot::corrplot(correlation, 'ellipse', type = 'lower',  order = 'hclust')
+```
+<<<<<<< HEAD
+
+We plugged in all the predictors, or independent variables, into this correlation matrix to visualize if there are any variables constitute multicollinearity.
+
+At first glance, there is *total thumb up per hour(tot_tu_phour)* that is highly positively correlated with *friends added per hour (frds_added_phour)*. Likewise, *total add to playlist(tot_add2PL_phour)* is highly correlated with *total thumb up per hour(tot_tu_phour)*. Adding to the mix, we see that *total songs play per hour(songs_phour)* and *total activity per hour(tot_act_phour)* are highly positively correlated with the 3 mentioned variables. It makes sense because *total songs played* and *total activities* should be associated the the level of *thumbs-up*, *adding to Play list*, and *friends added*. The obvious decision is to keep one out of the 5 variables here. I'd opt for *friends added per hour(frds_added_phour)*.
+
+On the other hand, *average session duration(Avg_session_duration)* is highly positively correlated with *average event happened per session(avg_events_per_session)*. Let's pick *average session duration(Avg_session_duration)* as the final variable.
+
+Thirdly, the *total thumbs-down per hour (tot_td_phour)* and *total ads played per hour (total_ads_phour)* is highly positively correlated. *Home Page visits per hour (HP_visits_phour)* is highly positively correlated with *total thumbs-down per hour(tot_td_phour)*. *Home Page visits per hour (HP_visits_phour)* is also highly and positively correlated with *total songs play per hour(songs_phour)* and *total activity per hour(tot_act_phour)*. Let's pick *total thumbs-down per hour (tot_td_phour)* among these 5 variables.
+
+In addition, we also spotted 2 pair of highly negatively correlated variables. One is *ratio of new song listened(new_songs_ratio)* and *total error occurred per hour(tot_errs_phour)*. The other pair is *ratio of new song listened(new_songs_ratio)* and *total thumbs-up per hour (tot_tu_phour)*. Out of these 3 variables we will keep *total error occurred per hour(tot_errs_phour)*.
+
+To summarize, here is the list of variables we wanted to remove:
+
+-   tot_add2PL_phour
+
+-   tot_tu_phour
+
+-   songs_phour
+
+-   tot_act_phour
+
+-   avg_events_per_session
+
+-   total_ads_phour
+
+-   HP_visits_phour
+
+-   new_songs_ratio
+
+With that said, here is the list of variables that we eventually wanted to keep:
+
+**distribution of activity variables**
+
+=======
+**distribution of activity variables**
+>>>>>>> origin/master
+```{r warning=FALSE}
+temp <- train_df %>% select(-c(userId))
+temp %>% 
+  purrr::keep(is.numeric) %>% 
+  cbind(churn = as.factor(train_df$churn)) %>% 
+  tidyr::gather("key", "value", - churn, factor_key = T) %>% 
+  ggplot(aes(value, color = churn)) +
+    facet_wrap(~ key, scales = "free") +
+    geom_density()
+```
+<<<<<<< HEAD
+
+By looking at the churn categorical variable, which is denoted by 0 and 1, meaning a user Not Churned or Churned respectively, we can analytically visualize the patterns with each of the predictors we have.
+
+At the first glance, *total activities per hour (tot_act_phour)*, *songs played per hour (songs_phour)*, *total thumbs-up per hour (tot_tu_phour)*, *total thumbs-down per hour(tot_td_phour)*, *friends added per hour (frds_added_phour)*, *totals add to playlist per hour (tot_Add2PL_phour)*, *Home Page Visits per hour (HP_visits_phour)* all exihibit the same pattern. It tells me that churn users tend to have more total activities, played more songs, interact more with the app by giving thumbs-up and thumbs-down, added more friends, added more songs to playlist, and have more homepage visits. It makes sense on aggregated average, these churn users knew they were going to churn so they spent more time doing all these activities before they churn.
+
+Total errors encountered per hour really is illustrative of the differentiating behavior by the Churn and Not Churned group. When the rate of errors encountered per hour is less than the threshold of 0.001875, you see people are indifferent with that. But as soon as the error rate is above that threshold, you see a clear sign of an overwhelmingly more churned users than non-churned. This totally makes a lot of sense to us as a team because users tend to churn if they are fed up with a certain frequency of errors they have faced, which, in turn, result in the action of churning the app.
+
+*Upgrades per hour (Upgrades_phour)* and *Downgrades per hour (Downgrades_phour)* really have some fluctuating patterns for non-churn. The way we interpreted it is that both churn and non-churn users do select their rate plan accordingly to their usage and budget. Non-churned users are more actively managing their subscriptions. That's why you see more activities from non-churned users because they have a higher tendency of managing their subscription. That's also an advanced move where you need to spend more time understanding the app in order to know the options of managing subscriptions.
+
+*Song Ratio (song_ratio)* calculates how often is the user going to go to the next song among all the activities. You see that at ratio has a mean of of distribution near 0.8 for both churned and non-churned users. What I notice is there are way more people from non-churned that has that ratio than the churned. Not churned users have exhaustively tried out next song much more than churned users.
+
+*Different activity per hour(Diff_act_phour)* and *different song listened per hour(diff_song_phour)* did illustrate the difference in number of activities or next songs that is done by the users between most recent and oldest period of 14 days. A positive number means there is more recent activities and songs listened than the initial period. When that difference is 0, meaning that they didn't ramp up more activities recently, you can tell naturally there are more users that is in the non-churned category than the churned category, which follows the pattern seen in Song Ratio. However, when the difference is positive, meaning the users did more activities and listened to more songs recently than in the initial period, you see apparently there are more churned users than non-churned users. This totally makes a lot of sense to us.
+
+At the end, we wanted to examine the *average songs played between home page visits (avg_songs_btwn_home)*. We see that the distributions of non-churned users has a peak at a higher level of songs than the counterparts in churned category. Meaning churned users tend to be listening to less songs between homepage visits. That tells me that they are less satisfied with the choice of the songs in their playlist and wanted to go back to Home Page more frequently than the nonchurned counterparts.
+=======
+>>>>>>> origin/master
+
+Up sampling
+
+```{r}
+temp <- train_df %>% filter(churn == 1) %>% 
+      slice(rep(1:n(), 
+            round(nrow(filter(train_df, churn == 0))/
+                    nrow(filter(train_df, churn == 1)),0)-1))
+train_df2 <- bind_rows(train_df, temp)
+
+```
+
+```{r}
+model_logi <- glm(churn~.-userId,family = binomial, train_df2)
+```
+
+```{r}
+summary(model_logi)
+```
+
+Performance evaluation using the up-sampled data
+
+```{r}
+predicted_class <- ifelse(model_logi$fitted.values>0.5,1,0)
+confusion_matrix <- confusionMatrix(as.factor(predicted_class),
+                                      train_df2$churn,
+                                    mode = "everything",positive = "1")
+confusion_matrix
+```
+
+Performance evaluation using the pre-up-sampled data
+
+```{r}
+predicted_class <- ifelse(predict(model_logi,train_df,type="response")>0.5,1,0)
+confusion_matrix <- confusionMatrix(as.factor(predicted_class),
+                                      train_df$churn,
+                                    mode = "everything",positive = "1")
+confusion_matrix
+```

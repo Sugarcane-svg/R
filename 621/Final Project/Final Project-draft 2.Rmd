@@ -1,0 +1,220 @@
+---
+title: "DATA_621_Final_Project"
+author: "Chi Pong, Euclid Zhang, Jie Zou, Joseph Connolly, LeTicia Cancel"
+date: "4/19/2022"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+```{r message=FALSE, warning=FALSE}
+library("stringr")
+library("dplyr")
+library("tidyr")
+
+library("arm")
+library("pROC")
+library("car")
+library("caret")
+
+library("reshape2")
+library("patchwork")
+```
+
+
+Note:
+
+1. No user is using multiple device.
+2. Users stay in the same location.
+3. All songs are finished before going to the next song.
+4. There is no "remove from Playlist" record.
+5. Only users who canceled the service are considered as churned. Free users with no activities are not considered as churned.
+6. We only have data from 10/1/2018 to 12/1/2018
+
+
+
+
+```{r}
+df <- read.csv("sparkify-medium.csv", stringsAsFactors = FALSE, row.names=1)
+```
+
+
+The time of registration for the records of a few users are incorrect (the time of registration is after the user's first log in).
+Correct the time of registration using the "Submit Registration" page and the session ID
+
+```{r}
+regist_df <- filter(df,df$page=="Submit Registration")
+
+for (i in c(1:nrow(regist_df))) {
+  temp_df <- df %>% 
+                filter(sessionId==regist_df$sessionId[i]) %>%
+                filter(!is.na(userId)) %>% 
+                mutate(delta=abs(ts-regist_df$ts[i])) %>% 
+                arrange(delta,desc=FALSE)
+
+  df[!is.na(df$userId) & df$userId==temp_df$userId[1],"registration"] <- regist_df$ts[i]
+}
+```
+
+Filter out the guest records (the ones without a userId)
+
+```{r}
+df <- filter(df,!is.na(userId))
+```
+
+Simplify the user Agent to represent the type of device that the user is using.
+
+```{r}
+df$userAgent[str_detect(df$userAgent,"Macintosh")] <- "Macintosh"
+df$userAgent[str_detect(df$userAgent,"iPad")] <- "iPad"
+df$userAgent[str_detect(df$userAgent,"iPhone")] <- "iPhone"
+df$userAgent[str_detect(df$userAgent,"Windows")] <- "Windows"
+df$userAgent[str_detect(df$userAgent,"Linux")] <- "Linux"
+```
+
+Select a subset of the activities that may be significant predictors. 
+Activities such as going to the home page or setting page that seem to be insignificant are excluded.
+
+```{r}
+# selected_pages <- c("NextSong","Roll Advert","Add Friend","Thumbs Up",
+#                     "Add to Playlist", "Upgrade", "Submit Upgrade", "Error",
+#                     "Thumbs Down","Cancel", "Cancellation Confirmation",
+#                     "Downgrade", "Submit Downgrade","Submit Registration")
+# df <- df[df$page %in% selected_pages,]
+```
+
+Convert some categorical variables in to factors.
+
+```{r}
+factor_columns <- c("page","auth","method","status","level","gender","userAgent")
+
+df[factor_columns] <- lapply(df[factor_columns], factor)
+```
+
+Remove some variables that are not used in our analysis
+```{r}
+df$home <- NULL
+df$method <- NULL
+df$status <- NULL
+df$itemInSession <- NULL
+df$location <- NULL
+df$lastName <- NULL
+df$firstName <- NULL
+df$auth <- NULL
+```
+
+
+Create a new variable indicating whether it is a song that the user never listened before.
+
+```{r}
+df <- arrange(df, ts,desc=FALSE)
+df$user_song <- paste0(df$userId, df$artist, df$song)
+temp <- df %>% group_by(user_song) %>% mutate(count=row_number())
+df$new_song <- temp$count
+temp <- NULL
+df$user_song <- NULL
+df$new_song[df$new_song > 1] <- 0
+df$new_song[is.na(df$song)] <- NA
+```
+
+
+
+```{r}
+page_df <- df %>% group_by(userId) %>% 
+  count(page) %>% 
+  spread(page, n, fill = 0)
+
+#Cancel column is identical to "Cancellation Confirmation" so it is removed
+page_df$Cancel <- NULL
+
+page_df[,2:ncol(page_df)] <- sapply(page_df[,2:ncol(page_df)], as.integer)
+page_df$Total_Activities <- apply(page_df[,2:ncol(page_df)], 1, sum)
+
+page_df
+```
+
+
+
+
+```{r message=FALSE, warning=FALSE}
+user_df <- df %>% filter(!is.na(song)) %>% 
+  arrange(ts, desc=FALSE) %>% 
+  group_by(userId) %>% 
+  summarise(active_sessions=n_distinct(sessionId),
+            new_songs_listened=sum(new_song),
+            registration=first(registration),
+            end_level=last(level),
+            gender=first(gender),
+            userAgent=first(userAgent))
+user_df
+```
+
+
+```{r}
+obs_df <- data.frame(userId=unique(df$userId))
+obs_df$start <- ifelse(user_df$registration > 1538352000000, user_df$registration, 1538352000000)
+obs_df$end <- 1543622400000
+temp <- filter(df, page == "Cancellation Confirmation")
+obs_df$end[obs_df$userId %in% temp$userId] <- temp$ts
+
+obs_df
+```
+
+```{r}
+prepared_df <- merge(obs_df, user_df, by=c("userId")) %>% 
+                arrange(userId)
+  
+prepared_df <- merge(prepared_df, page_df, by=c("userId")) %>% 
+                arrange(userId)
+
+names(prepared_df) <- str_replace_all(names(prepared_df), " ", "_")
+
+prepared_df
+```
+
+
+```{r}
+sub_obs_time_frame <- 14*24*3600*100
+```
+
+```{r}
+df <- merge(df, prepared_df[c("userId","start","end")], by=c("userId"))
+df
+```
+```{r}
+df_recent <- filter(df, ts >= end - sub_obs_time_frame)
+df_oldest <- filter(df, ts <= start + sub_obs_time_frame)
+```
+
+```{r}
+temp <- df_recent %>% group_by(userId) %>% 
+  summarise(recent_total_act = n())
+
+prepared_df <- merge(prepared_df, temp, by=c("userId"), all.x=TRUE)
+
+temp <- df_recent %>%  filter(page == "NextSong") %>% 
+  group_by(userId) %>% 
+  summarise(recent_total_song = n())
+
+prepared_df <- merge(prepared_df, temp, by=c("userId"), all.x=TRUE)
+
+temp <- df_oldest %>% group_by(userId) %>% 
+  summarise(oldest_total_act = n())
+
+prepared_df <- merge(prepared_df, temp, by=c("userId"), all.x=TRUE)
+
+temp <- df_oldest %>%  filter(page == "NextSong") %>% 
+  group_by(userId) %>% 
+  summarise(oldest_total_song = n())
+
+prepared_df <- merge(prepared_df, temp, by=c("userId"), all.x=TRUE)
+
+temp <- NULL
+prepared_df
+
+```
+
+

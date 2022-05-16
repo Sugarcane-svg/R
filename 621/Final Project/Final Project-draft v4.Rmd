@@ -1,0 +1,623 @@
+---
+title: "DATA_621_Final_Project"
+author: "Chi Pong, Euclid Zhang, Jie Zou, Joseph Connolly, LeTicia Cancel"
+date: "4/19/2022"
+output:
+  html_document:
+    df_print: paged
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r message=FALSE, warning=FALSE, echo=FALSE}
+library("stringr")
+library("dplyr")
+library("tidyr")
+
+#library("arm")
+library("pROC")
+library("car")
+library("caret")
+library(purrr)
+library("reshape2")
+library("patchwork")
+```
+
+```{r}
+#setwd("/Users/dpong/Data 621/Final_Project/Datasets")
+setwd("~/Library/CloudStorage/OneDrive-CityUniversityofNewYork/621/final_churn_modeling")
+df <- read.csv("sparkify-medium.csv", stringsAsFactors = FALSE, row.names=1)
+```
+
+# Data Souce
+
+In this analysis, we will utilize the sparkify data set created by Udacity, an educational organization.
+Sparkify is a fictional company providing music streaming service.
+
+The full data set is too large to run on a regular personal computer so we will focus on a subset of the data which is consist of 543705 user activity records of 448 users from 10/1/2018 to 12/1/2018.
+Each record contains the following information:
+
+* ts: Time Stamp (in milliseconds) of the user activity, range from 1538352000000 (the beginning of 10/1/2018) to 1543622400000 (the end of 12/1/2018) Greenwich Mean Time.
+* userId: The user's unique ID. NA if for guest activities.
+* sessionId: Identifier of a connection session. The Id is not unique and may be used by another user at a different time.
+* page: The page corresponding to a user's action. For example, *NextSong* indicates a user starts listening to a new song and *Roll Advert* indicates an advertisement is loaded.
+* auth: Indicates the user's status (logged in, logged out, guest, calcelled).
+* method: method of the user's web request, PUT or GET.
+* status: status of the web request. For example, 404 indicates the requested resource is not found.
+* level: the user's account level at the time of the activity (paid account or free account).
+* itemInSession: the number of cumulative activities during a web session.
+* location: geometric location (city and state) of the user.
+* userAgent: user agent of the user, which includes the type of device, operating system and browser version that the user is using.
+* lastName: last name of the registered user
+* firstName: first name of th registered user
+* registration: the time stamp of the time that a user submitted his/her registration
+* gender: the gender of the user
+* artist: the artist of the song that the user is listening. Different artists may have songs with the same title / name.
+* song: the title / name of the song.
+* length: the length of the song in seconds
+
+Since this data is fictional, there are several defects of the data we found and need to be aware when doing our analysis.
+
+1. We only have data from 10/1/2018 to 12/1/2018. We may be interested in comparing the users' current activities to the users' activities during a period right after they registered. However, almost all users in the data set registered before 10/1/2018.
+1. The user agent is static for each user, which may be implausible in real life where people use different devices.
+2. The location of the users are static. 
+3. By examining on the time stamps of the activities and the length of the songs, we found that there is no partially listened songs.
+4. There are "add to Playlist" activities in the record, but there is no "remove from Playlist" activities. The two activities may help the company identify if a user like the service but one of them is missing here.
+5. Only users who canceled the service are considered as churned. Free users with no recent activities are not considered as churned.
+
+
+In this analysis, we will clean up and aggregate the user activities based on the user ID. We will then perform feature engineering to build the features / variables for our model.
+
+
+# Data Clean Up and Aggregation
+
+
+The time of registration for the records of a few users are incorrect (the time of registration is after the user's first log in). 
+Correct the time of registration using the "Submit Registration" page and the session ID.
+
+```{r}
+regist_df <- filter(df,df$page=="Submit Registration")
+
+for (i in c(1:nrow(regist_df))) {
+  temp_df <- df %>% 
+                filter(sessionId==regist_df$sessionId[i]) %>%
+                filter(!is.na(userId)) %>% 
+                mutate(delta=abs(ts-regist_df$ts[i])) %>% 
+                arrange(delta,desc=FALSE)
+
+  df[!is.na(df$userId) & df$userId==temp_df$userId[1],"registration"] <- regist_df$ts[i]
+}
+```
+
+Filter out the guest records (the ones without a userId)
+
+```{r}
+df <- filter(df,!is.na(userId))
+```
+
+Simplify the user Agent to represent the type of device that the user is using.
+
+```{r}
+df$userAgent[str_detect(df$userAgent,"Macintosh")] <- "Macintosh"
+df$userAgent[str_detect(df$userAgent,"iPad")] <- "iPad"
+df$userAgent[str_detect(df$userAgent,"iPhone")] <- "iPhone"
+df$userAgent[str_detect(df$userAgent,"Windows")] <- "Windows"
+df$userAgent[str_detect(df$userAgent,"Linux")] <- "Linux"
+
+```
+
+Convert some categorical variables in to factors.
+
+```{r}
+factor_columns <- c("page","auth","method","status","level","gender","userAgent")
+
+df[factor_columns] <- lapply(df[factor_columns], factor)
+```
+
+Remove some variables that are not used in our analysis. For example, the method of the web request, the name of the user.
+
+```{r}
+df$method <- NULL
+df$status <- NULL
+df$itemInSession <- NULL
+df$location <- NULL
+df$lastName <- NULL
+df$firstName <- NULL
+df$auth <- NULL
+```
+
+Create a new variable indicating whether it is a song that the user never listened before.
+
+```{r}
+df <- arrange(df, ts,desc=FALSE)
+
+df$user_song <- paste0(df$userId, df$artist, df$song)
+temp <- df %>% group_by(user_song) %>% mutate(count=row_number())
+df$new_song <- temp$count
+temp <- NULL
+df$user_song <- NULL
+df$new_song[df$new_song > 1] <- 0
+df$new_song[is.na(df$song)] <- NA
+```
+
+Aggregate the total number of records for each category of user activities (indicated by the *page* variable).
+For example, we would like to know the total number songs listened by a user, the total number of thumbs-ups by a user. 
+
+```{r}
+page_df <- df %>% group_by(userId) %>% 
+  count(page) %>% 
+  spread(page, n, fill = 0)
+
+#Cancel column is identical to "Cancellation Confirmation" so it is removed
+page_df$Cancel <- NULL
+
+page_df[,2:ncol(page_df)] <- sapply(page_df[,2:ncol(page_df)], as.integer)
+page_df$Total_Activities <- apply(page_df[,2:ncol(page_df)], 1, sum)
+
+page_df
+```
+
+Summarize additional user activities (for example, the total number of unique sessions) and user information (for example, the user's account level of the last activity).
+
+```{r message=FALSE, warning=FALSE}
+user_df <- df %>% filter(!is.na(song)) %>% 
+  arrange(ts, desc=FALSE) %>% 
+  group_by(userId) %>% 
+  summarise(active_sessions=n_distinct(sessionId),
+            new_songs_listened=sum(new_song),
+            registration=first(registration),
+            end_level=last(level),
+            gender=first(gender),
+            userAgent=first(userAgent))
+user_df
+```
+
+Finding the beginning time stamp and ending time stamp of the observation period for each user.
+For users who registered before 10/1/2018, the observation starts from 10/1/2018 (1538352000000). Otherwise, the observation starts from the time of registraction.
+For users who cancelled their service, the observation ends by the time stamp of the last activity. Otherwise, the observation ends by 12/1/2018.
+
+```{r}
+df <- df %>% arrange(userId, desc=FALSE)
+
+obs_df <- data.frame(userId=unique(df$userId))
+obs_df$start <- ifelse(user_df$registration > 1538352000000, user_df$registration, 1538352000000)
+obs_df$end <- 1543622400000
+temp <- filter(df, page == "Cancellation Confirmation")
+obs_df$end[obs_df$userId %in% temp$userId] <- temp$ts
+```
+
+
+
+```{r}
+#Calculate ad rolled per hour when account level = paid / free
+
+roll_ad_df <- df %>% filter(page == "Roll Advert") %>%
+  group_by(userId, level) %>%
+  count() %>%
+  spread(level, n, fill = 0)
+```
+
+```{r message=FALSE, warning=FALSE}
+#percentage of the song listening time with account level = paid
+
+paid_time_df <- df %>% filter(!is.na(length)) %>%
+  group_by(userId, level) %>%
+  summarise(length = sum(length)) %>%
+  spread(level, length, fill = 0)
+
+paid_time_df$percent_paid <- paid_time_df$paid / (paid_time_df$free + paid_time_df$paid)
+paid_time_df$free <- NULL
+paid_time_df$paid <- NULL
+```
+
+
+
+Merging previously aggregated data into one dataframe.
+
+```{r}
+prepared_df <- merge(obs_df, user_df, by=c("userId")) %>% 
+                arrange(userId)
+  
+prepared_df <- merge(prepared_df, page_df, by=c("userId")) %>% 
+                arrange(userId)
+
+prepared_df <- merge(prepared_df, roll_ad_df, by=c("userId"), all.x=TRUE)
+
+prepared_df <- merge(prepared_df, paid_time_df, by=c("userId"), all.x=TRUE)
+
+
+prepared_df[is.na(prepared_df)] <- 0
+
+names(prepared_df) <- str_replace_all(names(prepared_df), " ", "_")
+
+#df <- merge(df, prepared_df[c("userId","start","end")], by=c("userId"))
+```
+
+
+# Feature Engineering
+
+Calculation of defined features that can be used as predictors for identifying users that are to churn.
+
+```{r}
+train_df <- dplyr::select(prepared_df,userId,end_level,gender,userAgent)
+train_df$churn <- as.factor(prepared_df$Cancellation_Confirmation)
+```
+
+```{r}
+#Since the lengths of the observation period are different for some users (new registrations and terminated users). We will scale the numbers of activities by the total number of hours in the whole observation period for each user.
+prepared_df$duration_in_hours <- (prepared_df$end - prepared_df$start)/3600/1000
+
+train_df$tot_act_phour <- prepared_df$Total_Activities/prepared_df$duration_in_hours
+train_df$songs_phour <- prepared_df$NextSong/prepared_df$duration_in_hours
+train_df$tot_tu_phour <- prepared_df$Thumbs_Up/prepared_df$duration_in_hours
+train_df$tot_td_phour <- prepared_df$Thumbs_Down/prepared_df$duration_in_hours
+train_df$frds_added_phour <- prepared_df$Add_Friend/prepared_df$duration_in_hours
+train_df$tot_add2PL_phour <- prepared_df$Add_to_Playlist/prepared_df$duration_in_hours
+train_df$HP_visits_phour <- prepared_df$Home/prepared_df$duration_in_hours
+train_df$tot_errs_phour <- prepared_df$Error/prepared_df$duration_in_hours
+train_df$upgrades_phour <- prepared_df$Submit_Upgrade/prepared_df$duration_in_hours
+train_df$downgrades_phour <- prepared_df$Submit_Downgrade/prepared_df$duration_in_hours
+train_df$setting_phour <- prepared_df$Settings/prepared_df$duration_in_hours
+train_df$save_setting_phour <- prepared_df$Save_Settings/prepared_df$duration_in_hours
+train_df$song_ratio <- prepared_df$NextSong / prepared_df$Total_Activities
+train_df$new_songs_ratio <- prepared_df$new_songs_listened / prepared_df$NextSong
+train_df$pos_negative_ratio <- (prepared_df$Thumbs_Up+1)/(prepared_df$Thumbs_Down+1)
+train_df$ad_per_song <- prepared_df$Roll_Advert / prepared_df$NextSong
+
+train_df$paid_ad_ph <- prepared_df$paid/prepared_df$duration_in_hours
+train_df$free_ad_ph <- prepared_df$free/prepared_df$duration_in_hours
+
+train_df$percent_paid <- prepared_df$percent_paid
+```
+
+```{r}
+# Calculation of user's average number of events per session
+session_avg <- df %>% 
+                group_by(userId, sessionId) %>%
+                summarise(events = n(), .groups = 'drop') %>%
+                group_by(userId) %>%
+                summarise(avg_events_per_session = mean(events)) 
+```
+
+```{r}
+# Calculation of user's average session duration
+
+session_avg_length = df  %>% 
+                    group_by(userId, sessionId) %>%
+                    arrange(ts, .by_group = TRUE) %>% 
+                    # filter(userId==3) %>%
+                    summarise( session_begin_ts = min(ts), 
+                               session_end_ts = max(ts), 
+                               .groups = 'drop') %>% 
+                    group_by(userId) %>% 
+                    summarise( avg_session_duration = mean(session_end_ts-session_begin_ts))
+
+#Convert from timestamp unit to hour
+session_avg_length$avg_session_duration <- session_avg_length$avg_session_duration / 3600000
+```
+
+
+
+Incorporating all the newly defined business metrics into the main data.frame (prepared_df)
+
+```{r include=FALSE, echo=FALSE}
+train_df <- merge(train_df, session_avg, by=c("userId")) %>% 
+                arrange(userId)
+  
+train_df <- merge(train_df, session_avg_length, by=c("userId")) %>% 
+                arrange(userId)
+train_df$userId <- NULL
+train_df
+```
+
+Since the lengths of the observation period are different for some users (new registrations and terminated users). We will scale the numbers of activities by the total number of hours in the whole observation period for each user.
+
+The followings are the created features for our analysis
+
+* end_level: The user's account level at the end of the observation period (paid account or free account)
+* gender: The gender of the user
+* userAgent: The type of device that the user is using (Windows, Iphone, Ipad, etc.)
+* tot_act_phour: The total number of user activities / Total number of hours in the observation period
+* songs_phour: The total number of songs listened / Total number of hours in the observation period
+* tot_tu_phour: The total number of thumbs-ups / Total number of hours in the observation period
+* tot_td_phour: The total number of thumbs-downs / Total number of hours in the observation period
+* frds_added_phour: The total number of friends added / Total number of hours in the observation period
+* tot_add2PL_phour: The total number of songs added to the play list / Total number of hours in the observation period
+* HP_visits_phour: The total number of home page visit / Total number of hours in the observation period
+* tot_errs_phour: The total number of error page encountered / Total number of hours in the observation period
+* upgrades_phour: The total number of account level upgrading submitted / Total number of hours in the observation period
+* downgrades_phour: The total number of account level downgrading submitted  / Total number of hours in the observation period
+* setting_phour: The total number of setting updating attempted / Total number of hours in the observation period
+* save_setting_phour: The total number of setting updating submitted / Total number of hours in the observation period
+* song_ratio: The percentage of the activities that are NextSong (start listening to a song)
+* new_songs_ratio: The percentage of the songs listened that the user has not listened before (which are the non-repeated songs)
+* pos_negative_ratio: The ratio of the number of thumbs-ups to the number of thumbs-downs. To handle the issue of dividing by zero, the ratio is modified to (thumbs-ups + 1) / (thumbs-downs + 1).
+* ad_per_song: The average number of advertisement per song listened
+* paid_ad_ph: The total number of advertisement listened when the user level = paid / Total number of hours in the observation period
+* free_ad_ph: The total number of advertisement listened when the user level = free / Total number of hours in the observation period
+* percent_paid: The percentage of the song-listening time that the user's account is in the paid level
+* avg_events_per_session: The average number of activities per session
+* avg_session_duration: The average duration per session in hours
+
+
+
+
+### Relations
+
+**Collinearity Check for Numeric Variables**
+
+
+We plugged in all the predictors, or independent variables, into this correlation matrix to visualize if there are any variables constitute multicollinearity.
+
+```{r fig.height=10, fig.width=13, include=FALSE, echo=FALSE}
+corrplot::corrplot(cor(train_df[,5:(ncol(train_df))], use = "na.or.complete"), 
+                   method = 'number', type = 'lower', diag = FALSE, tl.srt = 0.1)
+```
+
+To reduce multicollinearity of our data and reduce the complexity of our model, variables with correlation more than 0.8 are considered highly correlated and some variables are excluded as described below:
+
+*tot_act_phour* is highly correlated with *songs_phour*, *tot_tu_phour*, *tot_td_phour*, *freds_added_phour*, *tot_add2PL_phour*, *HP_visits_phour*, and *setting_phour*. As song listening is main service here and we would like to know our service's user experience, we would keep *songs_phour* and drop the other variables.
+
+*HP_visits_phour* is highly correlated with *free_ad_phour*. Likewise, setting_phour is highly positively correlated with HP_visits_phour. setting_phour was already dropped in the previous block. As we would like to know the user's option about the ads, we would keep *free_ad_phour* and drop *HP_visits_phour*
+
+As expected, *avg_events_per_session* and *avg_session_duration* are highly correlated. Longer sessions have more events. We would keep *avg_session_duration* and drop *avg_events_per_session*
+
+
+To summarize, here is the list of variables we wanted to remove:
+
+-   tot_act_phour
+-   tot_tu_phour
+-   tot_td_phour
+-   freds_added_phour
+-   tot_add2PL_phour
+-   HP_visits_phour
+-   setting_phour
+-   avg_events_per_session
+
+
+```{r}
+train_df$tot_act_phour <- NULL
+train_df$tot_tu_phour <- NULL
+train_df$tot_td_phour <- NULL
+train_df$frds_added_phour <- NULL
+train_df$tot_add2PL_phour <- NULL
+train_df$HP_visits_phour <- NULL
+train_df$setting_phour <- NULL
+train_df$diff_act_phour <- NULL
+train_df$avg_events_per_session <- NULL
+```
+
+We have the following correlations after the highly correlated ones are removed.
+
+
+```{r fig.height=10, fig.width=10, include=FALSE, echo=FALSE}
+corrplot::corrplot(cor(train_df[,5:(ncol(train_df))], use = "na.or.complete"), 
+                   method = 'number', type = 'lower', diag = FALSE, tl.srt = 0.1)
+```
+
+
+**distribution of categorical variables**
+
+```{r echo=FALSE, warning=FALSE}
+train_df %>% 
+  keep(is.factor) %>% 
+  gather("var", "val", -churn) %>% 
+  group_by(churn, var, val) %>% 
+  count() %>% 
+  group_by(val) %>% 
+  mutate(p = n / sum(n)) %>% 
+  ggplot(aes(x = val,y = p, fill = churn)) +
+    geom_bar(stat = "identity", position = "dodge") +
+    geom_text(aes(label = round(p,2)), vjust = -0.5, position = position_dodge(width = 0.9), size = 2) +
+    facet_wrap(~ var, scales = "free") +
+    theme_classic() +
+    theme(axis.text.x = element_text(angle = 90)) +
+    labs(x = "categorical variables",
+         y = "percentage",
+         title = "distribution of categorical variables")
+          
+```
+
+From the plots, we find: 
+
+users will account level = paid seem to have a higher churn rate.
+The user's gender seems to have no effect on the likelihood of churning.
+iPhone users seem to be more likely to churn than other device users. Probably the app is not running well on a phone.
+
+
+**distribution of numeric variables**
+```{r echo=FALSE, fig.height=9, fig.width=10}
+train_df %>% 
+  keep(is.numeric) %>%
+  cbind(churn = as.factor(train_df$churn)) %>% 
+  gather("key", "value", -churn, factor_key = T) %>% 
+  ggplot(aes(value, color = churn)) +
+    facet_wrap(~ key, scales = "free") +
+    geom_density() +
+    theme_classic() + 
+    labs(x = "numeric variables",
+         title = "distribution of numeric variables")
+```
+
+**In the following plots, some variables are log-transformed for the better visualization, they are not transformed in the data for our modeling.**
+
+```{r fig.height=9, fig.width=10, warning=FALSE, echo=FALSE}
+train_df %>% 
+  keep(is.numeric) %>% 
+  select(-c(song_ratio, new_songs_ratio, pos_negative_ratio, percent_paid)) %>% 
+  map(., log) %>% 
+  as.data.frame() %>% 
+  cbind(churn = as.factor(train_df$churn),
+        song_ratio = train_df$song_ratio,
+        new_songs_ratio = train_df$new_songs_ratio,
+        pos_negative_ratio = train_df$pos_negative_ratio,
+        percent_paid = train_df$percent_paid) %>% 
+  gather("key", "value", -churn, factor_key = T) %>% 
+  ggplot(aes(value, color = churn)) +
+    facet_wrap(~ key, scales = "free") +
+    geom_density() +
+    theme_classic() + 
+    labs(x = "numeric variables",
+         title = "distribution of numeric variables")
+```
+
+For the user activities *songs_phour*, *tot_errs_phour*, *upgrades_phour*, *downgrades_phour*, and *save_setting_phour*, the higher the number of activities, the more likely the user is going to churn. This may imply that the more the user uses the service, the more unsatisfying the user feels.
+
+*pos_negative_ratio* seems to have little effect to the churn rate. This may imply that the dissatisfaction of the users are very likely to be irrelevant to the quality of the songs.
+
+The effect of advertisement listening is not so obvious on the *ad_per_song plot*. However, the *free_ad_ph* and *paid_ad_ph* do show that higher number of ad listened leads to high rate of churn. The dissatisfaction of the users may come from the advertisements.
+
+For *percent_paid*, users who do not change their account level (the ones staying 100% of the time free or 100% of the time paid) seem to have lower churn rate. They are content with service they are using.
+The ones who switched their account level may still feel unsatisfied about the service.
+
+*song_ratio*, *new_songs_ratio*, *avg_session_duration* do not show any obvious patterns about churning.
+
+The above findings are just ideas we get from the plots, the actual effect would need to be confirmed by our model analysis.
+
+
+
+
+
+Lastly, the target variable that is in the training dataset is observed to imbalanced.
+
+```{r}
+summary(train_df$churn)
+```
+In order to build a model with higher unbiasedness, we would use the method of upsampling. The method adds duplicate records of the minor class to the sample so that the size of the minor class is adjust to be close to the size of the major class.
+
+```{r}
+temp <- train_df %>% filter(churn == 1) %>% 
+      slice(rep(1:n(), 
+            round(nrow(filter(train_df, churn == 0))/
+                    nrow(filter(train_df, churn == 1)),0)-1))
+train_df2 <- bind_rows(train_df, temp)
+
+```
+
+
+Finally, we can start building our model.
+
+First, let's build our preliminary model with all the defined features.
+
+```{r message=FALSE, warning=FALSE}
+model_logi <- glm(churn~.,family = binomial, train_df2)
+```
+
+Checking the marginal model plots, we find that the variable *new_songs_ratio* does not fit well to our model. 
+
+```{r fig.height=3, fig.width=6, message=FALSE, warning=FALSE}
+marginalModelPlots(model_logi,~new_songs_ratio)
+```
+
+In order to fit the curvature, we will add a squared term of *new_songs_ratio* to our model
+
+```{r message=FALSE, warning=FALSE}
+model_logi <- glm(churn~.+I(new_songs_ratio^2),family = binomial, train_df2)
+```
+
+```{r}
+summary(model_logi)
+```
+
+From our full model, there are some features that are insignificant. 
+We would utilize the method of backward elimination based on the AIC score.
+
+```{r message=FALSE, warning=FALSE}
+model_logi <- step(model_logi, trace=0)
+```
+
+The following is the result of our final model. Most of the coefficients are statistically significant
+
+```{r}
+summary(model_logi)
+```
+By looking at the marginal model plots, there is no lack of fit of the model.
+
+```{r fig.height=8, fig.width=8, message=FALSE, warning=FALSE}
+marginalModelPlots(model_logi,~songs_phour+new_songs_ratio+pos_negative_ratio+ad_per_song+
+                     paid_ad_ph+free_ad_ph+percent_paid, layout =c(3,3))
+```
+
+The following deviance residual vs linear predictor plot also confirms that our model is valid. 
+The model is producing accurate predictions at the two ends.
+The errors around the match point 0 are independent and random.
+
+```{r}
+residual_df <- mutate(train_df2, residuals=residuals(model_logi,type="deviance"), 
+                      linpred=predict(model_logi,type = "link"))
+gdf <- group_by(residual_df, cut(linpred, breaks=unique(quantile(linpred,(1:100)/101))))
+diagdf <- summarise(gdf, residuals=mean(residuals), linpred=mean(linpred))
+plot(residuals ~ linpred, diagdf, xlab="linear predictor",xlim=c(-20,20))
+```
+
+Now let's check the performance of our model
+
+
+
+```{r message=FALSE, warning=FALSE}
+rocCurve <- roc(train_df2$churn, model_logi$fitted.values)
+plot(rocCurve)
+```
+```{r}
+rocCurve$auc
+```
+We have an AUC of 0.9445, which is a good number. The optimal threshold of classifying the target variable *churn* is
+
+```{r}
+optimal_threshold <- coords(rocCurve, "best", ret = "threshold")
+optimal_threshold
+```
+
+
+Performance evaluation using the up-sampled data
+
+
+```{r}
+predicted_class <- ifelse(model_logi$fitted.values>optimal_threshold[1,1],1,0)
+confusion_matrix <- confusionMatrix(as.factor(predicted_class),
+                                      train_df2$churn,
+                                    mode = "everything",positive = "1")
+confusion_matrix
+```
+
+
+Performance evaluation using the pre-up-sampled data
+
+```{r}
+predicted_class <- ifelse(predict(model_logi,train_df,type="response")>optimal_threshold[1,1],1,0)
+confusion_matrix <- confusionMatrix(as.factor(predicted_class),
+                                      train_df$churn,
+                                    mode = "everything",positive = "1")
+confusion_matrix
+```
+
+The evaluation using the pre-upsampled data and upsampled data both have a Balanced Accurary of over 91%.
+
+
+
+# Conclusion
+
+Now let's confirm the findings from our model output
+
+```{r}
+summary(model_logi)
+```
+* The coefficients of *songs_phour* is positive, which implies that the more the user uses the service, the more unsatisfying the user feels. It is consistent with our findings from the distribution plots
+* The coefficients of *end_levelpaid* and *percent_paid* both indicate that the users are unsatisfied with the paid service.
+* The coefficients of *ad_per_song*, *paid_ad_ph*, and *free_ad_ph* indicate that the more advertisement listened, the more likely the user is going to churn.
+* The coefficient of *paid_ad_ph* is 6 times the coefficient of *free_ad_ph*. Being a premium user but still need to listen to ads is intolerable to the users.
+* The *new_songs_ratio* has two coefficients, but since the range of the variable is 0-1, the combined effect is always positive. This tells us that users who find songs they like to listen repeatedly are less likely to churn.
+* The coefficient of *pos_negative_ratio* is negative. This indicates that the quality of the songs does matter, even though it is not showed obviously on the distribution plots. The better the user likes the songs, the lower the rate of churn.
+* Additionally, though the coefficients of *userAgent* are not statistically significant, the feature does help improving the model based on the AIC score. The coefficient of iPhone is the largest, which confirms our findings from the distribution plots that iphone users have higher churn rate.
+
+
+Though our model may help predicting the users that may churn so the company can take actions such as offering discounts to ask them stay, it is better to make improvements to the service to lower the chance of churn.
+
+Based on our findings, we have the following recommendations:
+
+* Improve the user experience of their premium users, especially removing advertisements that they are "suffering".
+* Lower the number of ads to the free level users. 
+* Refine their recommender system to suggest songs for each individual user. 
+* Cutomize their app page for iPhone users.

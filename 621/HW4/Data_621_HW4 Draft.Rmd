@@ -1,0 +1,716 @@
+---
+title: "DATA_621_HW4"
+author: "Chi Pong, Euclid Zhang, Jie Zou, Joseph Connolly, LeTicia Cancel"
+date: "3/14/2022"
+output:
+  pdf_document: default
+  html_document:
+    df_print: paged
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r include=FALSE}
+library("corrplot")
+library("MASS")
+library("ggplot2")
+library("patchwork")
+library("faraway")
+library("car")
+library("pROC")
+library("caret")
+library("dplyr")
+library("reshape2")
+
+library("mice")
+library("NADIA")
+library("arm")
+library("pROC")
+
+set.seed(2022)
+```
+
+
+```{r}
+# train_df <- read.csv("https://raw.githubusercontent.com/ezaccountz/DATA_621/main/HW4/insurance_training_data.csv")
+# test_df <- read.csv("https://raw.githubusercontent.com/ezaccountz/DATA_621/main/HW4/insurance-evaluation-data.csv")
+
+train_df <- read.csv("insurance_training_data.csv")
+test_df <- read.csv("insurance-evaluation-data.csv")
+```
+
+
+# DATA EXPLORATION
+
+## Data Summary
+
+First, let's correct the formats/values of the data
+```{r}
+train_df$INDEX <- NULL
+train_df$INCOME <- as.numeric(gsub('[$,]', '', train_df$INCOME))
+train_df$HOME_VAL <- as.numeric(gsub('[$,]', '', train_df$HOME_VAL))
+train_df$BLUEBOOK <- as.numeric(gsub('[$,]', '', train_df$BLUEBOOK))
+train_df$OLDCLAIM <- as.numeric(gsub('[$,]', '', train_df$OLDCLAIM))
+train_df$PARENT1 <- gsub("z_", "", train_df$PARENT1)
+train_df$MSTATUS <- gsub("z_", "", train_df$MSTATUS)
+train_df$SEX <- gsub("z_", "", train_df$SEX)
+train_df$EDUCATION <- gsub("z_", "", train_df$EDUCATION)
+train_df$EDUCATION <- gsub("<", "Less Than", train_df$EDUCATION)
+train_df$JOB <- gsub("z_", "", train_df$JOB)
+train_df$CAR_TYPE <- gsub("z_", "", train_df$CAR_TYPE)
+train_df$URBANICITY <- ifelse(train_df$URBANICITY == "Highly Urban/ Urban", "Urban","Rural")
+
+train_df$JOB[train_df$JOB == ""] <- NA
+
+train_df[c("TARGET_FLAG","PARENT1","MSTATUS", "SEX", "EDUCATION", "JOB","CAR_TYPE",
+           "RED_CAR", "URBANICITY", "CAR_USE","REVOKED")] <-             
+                lapply(train_df[c("TARGET_FLAG","PARENT1","MSTATUS", "SEX", 
+                                   "EDUCATION", "JOB","CAR_TYPE", "RED_CAR",
+                                   "URBANICITY", "CAR_USE","REVOKED")], factor)
+```
+
+Below is the summary of the cleaned up data.
+```{r}
+summary(train_df)
+```
+**YOJ**, **INCOME**, **HOME_VAL**, **CAR_AGE** have a lot of missing values, 
+we will perform multiple imputations to fill in the missing values.
+**CAR_AGE** also has an incorrect value of -3. We will also replace it by imputation.
+
+
+## Box Plots
+
+
+```{r fig.height=8, fig.width=10, warning=FALSE}
+data.m <- melt(train_df[c("TARGET_FLAG","KIDSDRIV","AGE","HOMEKIDS","YOJ","INCOME",
+                          "HOME_VAL", "TRAVTIME","BLUEBOOK","TIF","OLDCLAIM","CLM_FREQ", 
+                          "MVR_PTS","CAR_AGE")], id.vars = 'TARGET_FLAG')
+ggplot(data.m, aes(x = variable, y = value, fill = TARGET_FLAG)) + geom_boxplot() + 
+  facet_wrap(~ variable, scales = 'free') + theme_classic()
+```
+The box plots show that a lot of numric variables are right skewed, we will transform the variables to reduce outliers.
+
+
+## Distribution plots
+
+```{r fig.height=6, fig.width=10, warning=FALSE}
+plot_KIDSDRIV <- ggplot(train_df, aes(x=KIDSDRIV, color=TARGET_FLAG)) + geom_density(na.rm =TRUE, bw=0.3)
+plot_AGE <- ggplot(train_df, aes(x=AGE, color=TARGET_FLAG)) + geom_density(na.rm =TRUE)
+plot_HOMEKIDS <- ggplot(train_df, aes(x=HOMEKIDS, color=TARGET_FLAG)) + geom_density(na.rm =TRUE, bw=0.4)
+plot_YOJ <- ggplot(train_df, aes(x=YOJ, color=TARGET_FLAG)) + geom_density(na.rm =TRUE)
+plot_INCOME <- ggplot(train_df, aes(x=INCOME, color=TARGET_FLAG)) + geom_density(na.rm =TRUE)
+plot_HOME_VAL <- ggplot(train_df, aes(x=HOME_VAL, color=TARGET_FLAG)) + geom_density(na.rm =TRUE)
+plot_TRAVTIME <- ggplot(train_df, aes(x=TRAVTIME, color=TARGET_FLAG)) + geom_density(na.rm =TRUE)
+plot_BLUEBOOK <- ggplot(train_df, aes(x=BLUEBOOK, color=TARGET_FLAG)) + geom_density(na.rm =TRUE)
+plot_TIF <- ggplot(train_df, aes(x=TIF, color=TARGET_FLAG)) + geom_density(na.rm =TRUE)
+plot_OLDCLAIM <- ggplot(train_df, aes(x=OLDCLAIM, color=TARGET_FLAG)) + geom_density(na.rm =TRUE)
+plot_CLM_FREQ <- ggplot(train_df, aes(x=CLM_FREQ, color=TARGET_FLAG)) + geom_density(na.rm =TRUE, bw=0.4)
+plot_MVR_PTS <- ggplot(train_df, aes(x=MVR_PTS, color=TARGET_FLAG)) + geom_density(na.rm =TRUE, bw=0.4)
+plots_CAR_AGE <- ggplot(train_df, aes(x=CAR_AGE, color=TARGET_FLAG)) + geom_density(na.rm =TRUE)
+
+
+plot_KIDSDRIV+plot_AGE+plot_HOMEKIDS+plot_YOJ+plot_INCOME+plot_HOME_VAL+
+  plot_TRAVTIME+plot_BLUEBOOK+plot_TIF+plot_OLDCLAIM+plot_CLM_FREQ+
+  plot_MVR_PTS+plots_CAR_AGE+
+  plot_layout(ncol = 4, guides = "collect")
+```
+Most of the distributions are similar for target = 0 and target = 1. 
+**OLDCLAIM** and **CLM_FREQ** are good candidates predicting whether there is a crash.
+
+
+We can also look at the categorical variables:
+```{r fig.height=10, fig.width=10, warning=FALSE}
+plot_PARENT1 <- ggplot(train_df,aes(x=PARENT1,fill=TARGET_FLAG))+geom_bar(position = position_dodge())
+plot_MSTATUS <- ggplot(train_df,aes(x=MSTATUS,fill=TARGET_FLAG))+geom_bar(position = position_dodge())
+plot_SEX <- ggplot(train_df,aes(x=SEX,fill=TARGET_FLAG))+geom_bar(position = position_dodge())
+plot_EDUCATION <- ggplot(train_df,aes(x=substring(train_df$EDUCATION,1,5),fill=TARGET_FLAG))+
+                  geom_bar(position = position_dodge())+xlab("EDUCATION")
+plot_JOB <- ggplot(train_df,aes(x=substring(train_df$JOB,1,2),fill=TARGET_FLAG))+
+                  geom_bar(position = position_dodge())+xlab("JOB")
+plot_CAR_TYPE <- ggplot(train_df,aes(x=substring(train_df$CAR_TYPE,1,4),fill=TARGET_FLAG))+
+                  geom_bar(position = position_dodge())+xlab("CAR_TYPE")
+plot_RED_CAR <- ggplot(train_df,aes(x=RED_CAR,fill=TARGET_FLAG))+geom_bar(position = position_dodge())
+plot_URBANICITY <- ggplot(train_df,aes(x=URBANICITY,fill=TARGET_FLAG))+geom_bar(position = position_dodge())
+plot_CAR_USE <- ggplot(train_df,aes(x=CAR_USE,fill=TARGET_FLAG))+geom_bar(position = position_dodge())
+plot_REVOKED <- ggplot(train_df,aes(x=REVOKED,fill=TARGET_FLAG))+geom_bar(position = position_dodge())
+
+plot_PARENT1+plot_MSTATUS+plot_SEX+plot_EDUCATION+plot_JOB+plot_CAR_TYPE+plot_RED_CAR+
+  plot_URBANICITY+plot_CAR_USE+plot_REVOKED+plot_layout(ncol = 3, guides = "collect")
+```
+**PARENT1**, **MSTATUS**, **URBANICITY**, **CAR_USE** AND **REVOKED** seem to have notable difference in the distributions beween target = 0 and target = 1
+
+
+
+## Correlations
+
+Now let's look at the correlations between the variables  
+```{r fig.height=10, fig.width=10}
+corrplot::corrplot(cor(train_df[c("KIDSDRIV","AGE","HOMEKIDS","YOJ","INCOME",
+                                  "HOME_VAL","BLUEBOOK","TIF","OLDCLAIM", "CLM_FREQ",
+                                  "MVR_PTS","CAR_AGE")], use = "na.or.complete"), 
+                   method = 'number', type = 'lower', diag = FALSE, tl.srt = 0.1)
+```
+None of the variables have very strong correlations. 
+
+# DATA PREPARATION
+
+## Data Imputation
+
+
+```{r}
+#save the indicators of missing values. It will be used to verify the distributions
+#of the imputed values
+YOJ_NA <- is.na(train_df$YOJ)
+INCOME_NA <- is.na(train_df$INCOME)
+HOME_VAL_NA <- is.na(train_df$HOME_VAL)
+CAR_AGE_NA <- is.na(train_df$CAR_AGE)
+
+#remove incorrect CAR_AGE value for imputation
+train_df$CAR_AGE[train_df$CAR_AGE < 0] <- NA
+
+#temporary exclude TARGET_FLAG and TARGET_AMT in our imputation
+TARGET_FLAG <- train_df$TARGET_FLAG
+TARGET_AMT <- train_df$TARGET_AMT
+train_df$TARGET_FLAG <- NULL
+train_df$TARGET_AMT <- NULL
+
+#save the imputation models to impute the test data set later
+mickey <- parlmice(train_df, maxit = 5, m = 1, printFlag = FALSE, seed = 2022, cluster.seed = 2022)
+
+#save the imputation result
+train_df <- complete(mickey,1)
+
+#Add TARGET_FLAG and TARGET_AMT back to our dataframe
+train_df$TARGET_FLAG <- TARGET_FLAG
+train_df$TARGET_AMT <- TARGET_AMT
+TARGET_FLAG <- NULL
+TARGET_AMT <- NULL
+
+#write.csv(train_df,"train_df.csv", row.names = FALSE)
+```
+
+```{r}
+# train_df <- read.csv("train_df.csv", stringsAsFactors = TRUE)
+# train_df$TARGET_FLAG <- as.factor(train_df$TARGET_FLAG)
+```
+
+
+The plots on the top row below show the distributions of the values from the original data
+
+The plots on the bottom row below show the distributions of the imputed values
+
+```{r fig.height=4, fig.width=10, warning=FALSE}
+plot_YOJ <- ggplot(train_df[!YOJ_NA,], aes(x=YOJ, color=TARGET_FLAG)) + geom_density(na.rm =TRUE)
+plot_INCOME <- ggplot(train_df[!INCOME_NA,], aes(x=INCOME, color=TARGET_FLAG)) + geom_density(na.rm =TRUE)
+plot_HOME_VAL <- ggplot(train_df[!HOME_VAL_NA,], aes(x=HOME_VAL, color=TARGET_FLAG)) + geom_density(na.rm =TRUE)
+plot_CAR_AGE <- ggplot(train_df[!CAR_AGE_NA,], aes(x=CAR_AGE, color=TARGET_FLAG)) + geom_density(na.rm =TRUE)
+
+plot_YOJ2 <- ggplot(train_df[YOJ_NA,], aes(x=YOJ, color=TARGET_FLAG)) + geom_density(na.rm =TRUE)
+plot_INCOME2 <- ggplot(train_df[INCOME_NA,], aes(x=INCOME, color=TARGET_FLAG)) + geom_density(na.rm =TRUE)
+plot_HOME_VAL2 <- ggplot(train_df[HOME_VAL_NA,], aes(x=HOME_VAL, color=TARGET_FLAG)) + geom_density(na.rm =TRUE)
+plot_CAR_AGE2 <- ggplot(train_df[CAR_AGE_NA,], aes(x=CAR_AGE, color=TARGET_FLAG)) + geom_density(na.rm =TRUE)
+
+plot_YOJ+plot_INCOME+plot_HOME_VAL+plot_CAR_AGE+
+  plot_YOJ2+plot_INCOME2+plot_HOME_VAL2+plot_CAR_AGE2+
+  plot_layout(ncol = 4, guides = "collect")
+```
+The distributions look similar and so the imputed values are plausible
+
+
+
+
+## Data Transformation
+
+
+Since **YOJ** and **HOME_VAL** are zero-inflated. We would add a dummy variable for each of them indicating whether the variable is 0. The effect of variables 
+
+**YOJ**: The density plot shows the variable is zero-inflated. The coefficient for YOJ=0 and the coefficient for YOJ>0 may be significantly different. Therefore, we would add a dummy variable indicating whether the variable is 0.
+**HOME_VAL**: The variable is also zero-inflated, we would add a dummy variable indicating whether the person has a house. 
+**INCOME**: We would add a dummy variable indicating whether the person has a job. Practically, it is a key factor in insurance pricing.
+**OLDCLAIM**: We would add a dummy variable indicating whether the person had an old claim. The coefficient for OLDCLAIM=0 and the coefficient for OLDCLAIM>0 may be significantly different.
+
+**INCOME**, **HOME_VAL**, **BLUEBOOK**, **OLDCLAIM**: We will log transform all monetary variables as they are right-skewed.
+
+```{r}
+
+train_df$YOJ_Y <- as.factor(ifelse(train_df$YOJ == 0,0,1))
+train_df$INCOME_Y <- as.factor(ifelse(train_df$INCOME == 0,0,1))
+train_df$HOME_VAL_Y <- as.factor(ifelse(train_df$HOME_VAL == 0,0,1))
+train_df$OLDCLAIM_Y <- as.factor(ifelse(train_df$OLDCLAIM == 0,0,1))
+
+train_df$INCOME_LOG <- log(train_df$INCOME+1)
+train_df$HOME_VAL_LOG <- log(train_df$HOME_VAL+1)
+train_df$BLUEBOOK_LOG <- log(train_df$BLUEBOOK)
+train_df$OLDCLAIM_LOG <- log(train_df$OLDCLAIM+1)
+
+train_df$INCOME <- NULL
+train_df$HOME_VAL <- NULL
+train_df$BLUEBOOK <- NULL
+train_df$OLDCLAIM <- NULL
+
+logistic_train_df <- train_df
+```
+
+
+# Logistic Models
+
+First, let build a test model to see if any additional transformations are needed to fit our logistic models
+
+```{r}
+test_model <- glm(TARGET_FLAG~.-TARGET_AMT, family = binomial, logistic_train_df)
+```
+
+
+```{r fig.height=10, fig.width=10, message=FALSE, warning=FALSE}
+marginalModelPlots(test_model,~KIDSDRIV + AGE + HOMEKIDS + YOJ  + BLUEBOOK_LOG +  
+                    HOME_VAL_LOG + TRAVTIME+ INCOME_LOG + TIF + OLDCLAIM_LOG +
+                     CLM_FREQ + MVR_PTS + CAR_AGE, layout =c(4,4))
+```
+
+## Additonal Transformations
+
+Additional transformation are needed for **KIDSDRIV**, **AGE**, **HOMEKIDS**, **TRAVTIME**, and **MVR_PTS**
+
+
+From the density plots above, the see that **AGE** is approximately normal for both target = 0 and target = 1.
+From the text book *A Modern Approach To Regression With R*, if the variance of the variable is different for the two response value, then a squared term should be added. 
+
+```{r}
+data.frame(Variance_of_AGE_TARGET0 = c(var(logistic_train_df$AGE[logistic_train_df$TARGET_FLAG == 0])),
+           Variance_of_AGE_TARGET1 = c(var(logistic_train_df$AGE[logistic_train_df$TARGET_FLAG == 1])))
+```
+
+```{r}
+var.test(AGE ~ TARGET_FLAG, logistic_train_df, alternative = "two.sided")
+```
+The variance is apparently different. We will add a squared term and check if that fits the model.
+
+```{r}
+logistic_train_df$AGE_Squared <- logistic_train_df$AGE^2
+```
+
+For **KIDSDRIV**, **HOMEKIDS**, **TRAVTIME**, and **MVR_PTS**, power transformations are used and the powers are determined by trial and error
+
+
+```{r}
+logistic_train_df$KIDSDRIV_0.5 <- (logistic_train_df$KIDSDRIV)^0.5
+logistic_train_df$HOMEKIDS_0.5 <- (logistic_train_df$HOMEKIDS)^0.5
+logistic_train_df$MVR_PTS_3 <- (logistic_train_df$MVR_PTS)^3
+logistic_train_df$TRAVTIME_0.33 <- (logistic_train_df$TRAVTIME)^0.33
+
+logistic_train_df$KIDSDRIV <- NULL
+logistic_train_df$HOMEKIDS <- NULL
+logistic_train_df$MVR_PTS <- NULL
+logistic_train_df$TRAVTIME <- NULL
+```
+
+After all the transformations, the test model now fits our data well
+
+```{r}
+test_model <- glm(TARGET_FLAG~.-TARGET_AMT, family = binomial, logistic_train_df)
+```
+
+
+```{r fig.height=10, fig.width=10, message=FALSE, warning=FALSE}
+marginalModelPlots(test_model,~KIDSDRIV_0.5 + AGE + HOMEKIDS_0.5 + YOJ  + BLUEBOOK_LOG +  
+                    HOME_VAL_LOG + TRAVTIME_0.33 + INCOME_LOG + TIF + OLDCLAIM_LOG +
+                     CLM_FREQ + MVR_PTS_3 + CAR_AGE, layout =c(4,4))
+```
+
+
+
+## Building Models
+
+### Full Model
+
+First we build a full model with all predictors
+```{r}
+logi_full <- glm(TARGET_FLAG~.-TARGET_AMT, family = binomial, logistic_train_df)
+```
+
+
+```{r}
+summary(logi_full)
+```
+### Backward Elimination by AIC
+
+
+```{r}
+logi_AIC <- step(logi_full,trace=0)
+
+summary(logi_AIC)
+```
+
+### Backward Elimination by BIC
+
+```{r}
+logi_BIC <- step(logi_full,trace=0,k=log(nrow(logistic_train_df)))
+
+summary(logi_BIC)
+```
+
+
+
+
+### Backward Elimination with Chi-square test
+
+Starting with our full model, perform backward elimination with Chi-square test.
+
+```{r warning=FALSE}
+#Define a function to perform backward elimination with Chi-square test 
+#using the significancy / alpha as one of the parameters
+
+backward_chi <- function (train_df, significancy) {
+  glm_string <- "TARGET_FLAG~.-TARGET_AMT"
+  glm_formula <- as.formula(glm_string)
+  
+  repeat{
+    drop1_chi <- drop1(glm(glm_formula, family=binomial, train_df), test="Chi")
+  
+    chi_result <- data.frame(preditors = rownames(drop1_chi)[-1],
+             p_value = drop1_chi[-1,5])
+    chi_result <- chi_result[order(chi_result$p_value,decreasing=TRUE),]
+    
+    if(chi_result[1,2] < significancy){
+        break
+    }
+    else {
+        glm_string <- paste0(glm_string,"-",chi_result[1,1])
+        glm_formula <- as.formula(glm_string)
+    }
+  }
+
+  return(glm_formula)
+}
+
+```
+
+
+model with alpha 0.001 (based on Chi-square test)**
+
+```{r warning=FALSE}
+logi_chi_0.001 <- backward_chi(logistic_train_df, 0.001)
+logi_chi_0.001 <- glm(logi_chi_0.001, family=binomial, logistic_train_df) 
+summary(logi_chi_0.001)
+```
+
+## Model Selection
+
+
+Since the data is imbalanced, we would not use the threshold for our model predictions.
+
+In business, we don't want to misclassify a person with high risk to be low risk.
+We also don't want to lose customers by charging low risk people at a high-risk rate.
+Practically, we should use a cost matrix to determine the threshold for our classification.
+Since we don't know the cost here, we will weight the Sensitivity and Specificity equally.
+We will find our optimal threshold that maximize the sum of Sensitivity and Specificity
+
+
+```{r message=FALSE, warning=FALSE}
+logi_models <- data.frame(model=c(""),DF=c(0),AIC=c(0.0000),AUC=c(0.0000),
+                          Optimal_Threhold=c(0.0000),Sensitivity=c(0.0000),
+                          Specificity=c(0.0000),Sum_Sens_Spec=c(0.0000))
+
+models <- list(logi_full, logi_AIC, logi_BIC, logi_chi_0.001)
+model_names <- c("logi_full", "logi_AIC", "logi_BIC", "logi_chi_0.001")
+for (i in c(1:length(models))) {
+    logi_models[i,"model"] <- model_names[i]
+    logi_models[i,"DF"] <- models[[i]]$df.residual
+    logi_models[i,"AIC"] <- round(models[[i]]$aic,4)
+    rocCurve <- roc(logistic_train_df$TARGET_FLAG, models[[i]]$fitted.values)
+    logi_models[i,"AUC"] <- round(rocCurve$auc,4)
+    roc_df <- data.frame(Sensitivity = rocCurve$sensitivities, Specificity = rocCurve$specificities,
+                         Sum_Sens_Spec = rocCurve$sensitivities+rocCurve$specificities,
+                         Thresholds = rocCurve$thresholds)
+    roc_df <- roc_df[which.max(roc_df$Sum_Sens_Spec),]
+    logi_models[i,"Optimal_Threhold"] <- roc_df$Thresholds
+    logi_models[i,"Sensitivity"] <- roc_df$Sensitivity
+    logi_models[i,"Specificity"] <- roc_df$Specificity
+    logi_models[i,"Sum_Sens_Spec"] <- roc_df$Sum_Sens_Spec
+}
+logi_models
+```
+By comparing the AUC and the sum of Sensitivity and Specificity, the best model is logi_AIC
+
+The following is the ROC of the logi_AIC model
+
+```{r message=FALSE, warning=FALSE}
+rocCurve <- roc(logistic_train_df$TARGET_FLAG, logi_AIC$fitted.values)
+plot(rocCurve)
+```
+
+The following is the confusion matrix of the logi_AIC model
+
+```{r}
+predicted_class <- ifelse(logi_AIC$fitted.values>logi_models[2,"Optimal_Threhold"],1,0)
+confusion_matrix <- confusionMatrix(as.factor(predicted_class),
+                                      as.factor(train_df$TARGET_FLAG),positive = "1")
+confusion_matrix
+```
+
+From the below marginal plots, we see no lack of fit of our model
+
+```{r fig.height=10, fig.width=8, message=FALSE, warning=FALSE}
+marginalModelPlots(logi_AIC,~KIDSDRIV_0.5 + AGE + BLUEBOOK_LOG + INCOME_LOG +
+                    HOME_VAL_LOG + TRAVTIME_0.33 + TIF + OLDCLAIM_LOG + CLM_FREQ +
+                     MVR_PTS_3 + CAR_AGE, layout =c(4,3))
+```
+
+The residual plot below also shows that the pearson residuals are independent with approximately constant variance, with only a few outliers.
+
+```{r}
+#arm::binnedplot(x = fitted(logi_AIC), y = residuals(logi_AIC, type="pearson"),
+arm::binnedplot(x = predict(logi_AIC, type="link"), y = residuals(logi_AIC, type="pearson"),                
+                nclass = NULL, 
+                xlab = "Mean of Link Function Value", 
+                ylab = "Average Pearson residual", 
+                main = "Binned residual plot", 
+                cex.pts = 0.8, 
+                col.pts = 1, 
+                col.int = "gray")
+```  
+We conclude that our optimal logistic model logi_AIC is valid
+
+
+
+
+# Linear Model
+
+
+First, let's build a test model to check if any additional transformations are needed to build a valid model
+
+```{r}
+lm_train_df <- train_df[train_df$TARGET_FLAG==1,]
+lm_train_df$TARGET_FLAG <- NULL
+#lm_train_df$TARGET_AMT <- log(lm_train_df$TARGET_AMT)
+# lm_train_df$HOME_VAL <- log(lm_train_df$HOME_VAL+1)
+# lm_train_df$BLUEBOOK <- log(lm_train_df$BLUEBOOK)
+# lm_train_df$INCOME <- log(lm_train_df$INCOME+1)
+```
+
+
+
+```{r}
+lm_full <- lm(TARGET_AMT~., lm_train_df)
+summary(lm_full)
+```
+```{r}
+plot(lm_full)
+```
+
+## Additioanl Transformation
+
+The plots show that there is a non-linear relationship between the response variable and the predictors.
+
+Let's see what transformation Box-Cox would suggest for the response variable. 
+```{r message=FALSE, warning=FALSE}
+bc <- boxcox(lm_full)
+lambda <- bc$x[which.max(bc$y)]
+lambda
+```
+It result indicates a log-transformation is appropriate.
+
+
+
+```{r}
+lm_train_df$TARGET_AMT_LOG <- log(lm_train_df$TARGET_AMT)
+lm_train_df$TARGET_AMT <- NULL
+```
+
+## Buidling Models
+
+### Full Model
+
+```{r}
+lm_full <- lm(TARGET_AMT_LOG~., lm_train_df)
+summary(lm_full)
+```
+```{r}
+plot(lm_full)
+```
+The residual plots show that the relationship is now linear. The only problem is that the distribution of the residuals is not normal.
+Since the optimal transformation suggested by Box-Cox would not fix this problem, a GLM regression would be more appropriate to fit the data in this case. 
+As requested by this assignment, we would keep the linear models. Since the normality of the residuals is violated, we would not judge the significance of the coefficient by the t-values. We will compare the performance of different models by the adjusted R-squared and the Root of Mean Square Errors.
+
+### Backward Elinmination By AIC
+
+```{r}
+lm_AIC <- step(lm_full, trace = 0)
+summary(lm_AIC)
+```
+
+### Backward Elinmination By BIC
+
+```{r}
+lm_BIC <- step(lm_full, trace = 0, k = log(nrow(lm_train_df)))
+summary(lm_BIC)
+```
+### Model with only characteristics of the cars
+
+```{r}
+lm_car <- lm(TARGET_AMT_LOG~CAR_USE+BLUEBOOK_LOG+CAR_TYPE+RED_CAR+CAR_AGE, data = lm_train_df)
+summary(lm_car)
+```
+## Model Selection
+
+```{r}
+lm_models <- data.frame(model=c(""),Num_of_Coefficients=c(0),
+                        R_squared_adj=c(0.0000), RMSE=c(0.0000))
+models <- list(lm_full, lm_AIC, lm_BIC, lm_car)
+model_names <- c("lm_full", "lm_AIC", "lm_BIC", "lm_car")
+for (i in c(1:length(models))) {
+    lm_models[i,"model"] <- model_names[i]
+    lm_models[i,"Num_of_Coefficients"] <- length(models[[i]]$coefficients) - 1
+    lm_models[i,"R_squared_adj"] <- summary(models[[i]])$adj.r.squared
+    lm_models[i,"RMSE"] <- sqrt(mean(models[[i]]$residuals^2))
+}
+lm_models
+```
+Model lm_AIC has the highest adjusted R-squared and the RMSE is very close to the full model.
+Our optimal linear model is lm_AIC
+
+```{r}
+plot(lm_AIC)
+```
+
+
+# Evaluation Data Prediction
+
+
+```{r}
+test_df$INDEX <- NULL
+test_df$INCOME <- as.numeric(gsub('[$,]', '', test_df$INCOME))
+test_df$HOME_VAL <- as.numeric(gsub('[$,]', '', test_df$HOME_VAL))
+test_df$BLUEBOOK <- as.numeric(gsub('[$,]', '', test_df$BLUEBOOK))
+test_df$OLDCLAIM <- as.numeric(gsub('[$,]', '', test_df$OLDCLAIM))
+test_df$PARENT1 <- gsub("z_", "", test_df$PARENT1)
+test_df$MSTATUS <- gsub("z_", "", test_df$MSTATUS)
+test_df$SEX <- gsub("z_", "", test_df$SEX)
+test_df$EDUCATION <- gsub("z_", "", test_df$EDUCATION)
+test_df$EDUCATION <- gsub("<", "Less Than", test_df$EDUCATION)
+test_df$JOB <- gsub("z_", "", test_df$JOB)
+test_df$CAR_TYPE <- gsub("z_", "", test_df$CAR_TYPE)
+test_df$URBANICITY <- ifelse(test_df$URBANICITY == "Highly Urban/ Urban", "Urban","Rural")
+
+test_df$JOB[test_df$JOB == ""] <- NA
+
+test_df[c("TARGET_FLAG","PARENT1","MSTATUS", "SEX", "EDUCATION", "JOB","CAR_TYPE",
+           "RED_CAR", "URBANICITY", "CAR_USE","REVOKED")] <-             
+                lapply(test_df[c("TARGET_FLAG","PARENT1","MSTATUS", "SEX", 
+                                   "EDUCATION", "JOB","CAR_TYPE", "RED_CAR",
+                                   "URBANICITY", "CAR_USE","REVOKED")], factor)
+
+
+
+```
+```{r message=FALSE, warning=FALSE}
+test_df$TARGET_FLAG <- NULL
+test_df$TARGET_AMT <- NULL
+
+test_df <- mice.reuse(mickey, test_df, maxit = 5, printFlag = FALSE, seed = 2022)[[1]]
+```
+
+```{r}
+summary(test_df)
+```
+
+```{r}
+
+test_df$YOJ_Y <- as.factor(ifelse(test_df$YOJ == 0,0,1))
+test_df$INCOME_Y <- as.factor(ifelse(test_df$INCOME == 0,0,1))
+test_df$HOME_VAL_Y <- as.factor(ifelse(test_df$HOME_VAL == 0,0,1))
+test_df$OLDCLAIM_Y <- as.factor(ifelse(test_df$OLDCLAIM == 0,0,1))
+
+test_df$INCOME_LOG <- log(test_df$INCOME+1)
+test_df$HOME_VAL_LOG <- log(test_df$HOME_VAL+1)
+test_df$BLUEBOOK_LOG <- log(test_df$BLUEBOOK)
+test_df$OLDCLAIM_LOG <- log(test_df$OLDCLAIM+1)
+
+test_df$INCOME <- NULL
+test_df$HOME_VAL <- NULL
+test_df$BLUEBOOK <- NULL
+test_df$OLDCLAIM <- NULL
+
+logistic_test_df <- test_df
+```
+
+
+```{r}
+logistic_test_df$AGE_Squared <- logistic_test_df$AGE^2
+```
+
+```{r}
+logistic_test_df$KIDSDRIV_0.5 <- (logistic_test_df$KIDSDRIV)^0.5
+logistic_test_df$HOMEKIDS_0.5 <- (logistic_test_df$HOMEKIDS)^0.5
+logistic_test_df$MVR_PTS_3 <- (logistic_test_df$MVR_PTS)^3
+logistic_test_df$TRAVTIME_0.33 <- (logistic_test_df$TRAVTIME)^0.33
+
+logistic_test_df$KIDSDRIV <- NULL
+logistic_test_df$HOMEKIDS <- NULL
+logistic_test_df$MVR_PTS <- NULL
+logistic_test_df$TRAVTIME <- NULL
+```
+
+
+
+```{r}
+logistic_test_df$TARGET_FLAG <- ifelse(predict(logi_AIC,logistic_test_df, type="response") > logi_models[2,"Optimal_Threhold"], 1 ,0)
+```
+
+
+```{r}
+test_predict <- logistic_test_df$TARGET_FLAG
+train_predict <- ifelse(logi_AIC$fitted.values>logi_models[2,"Optimal_Threhold"],1,0)
+```
+
+```{r}
+dist_df <- data.frame(rbind(
+      cbind(train_predict,"train_predict"),
+      cbind(test_predict,"test_predict")
+      ))
+colnames(dist_df) <- c("value","data")
+dist_df <- table(dist_df)
+dist_df[,1] <- dist_df[,1]/sum(dist_df[,1])
+dist_df[,2] <- dist_df[,2]/sum(dist_df[,2])
+dist_df
+```
+The model produces similar result for both the training and testing data. Around 60% of the cases are classified as no crash and 40% of the 
+cases are classified as having a crash. Our logistic model has similar performance for predicting unseen results.
+
+```{r}
+lm_test_df <- test_df
+lm_test_df$TARGET_FLAG <- NULL
+```
+
+
+```{r}
+lm_test_df$TARGET_AMT <- predict(lm_AIC,lm_test_df)
+lm_test_df$TARGET_AMT <- exp(lm_test_df$TARGET_AMT)
+```
+
+
+```{r}
+test_df$TARGET_FLAG <- logistic_test_df$TARGET_FLAG 
+test_df$TARGET_AMT <- lm_test_df$TARGET_AMT * logistic_test_df$TARGET_FLAG 
+```
+
+
+```{r}
+train_predict <- exp(lm_AIC$fitted.values)
+test_predict <- test_df$TARGET_AMT[test_df$TARGET_AMT > 0]
+
+dist_df <- data.frame(rbind(
+      cbind(train_predict,"train_predict"),
+      cbind(test_predict,"test_predict")
+      ),stringsAsFactors=FALSE)
+colnames(dist_df) <- c("value","data")
+dist_df$value <- as.numeric(dist_df$value)
+
+
+ggplot(dist_df, aes(x=value, color=data)) +
+  geom_density()
+```
+
+The prediction of claim amounts have similar distributions for the training and testing data. Our linear model has stable performance in predicting unseen results.

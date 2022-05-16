@@ -1,0 +1,512 @@
+---
+title: "DATA_621_Final_Project"
+author: "Chi Pong, Euclid Zhang, Jie Zou, Joseph Connolly, LeTicia Cancel"
+date: "4/19/2022"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+```{r message=FALSE, warning=FALSE}
+library("stringr")
+library("dplyr")
+library("tidyr")
+
+library("arm")
+library("pROC")
+library("car")
+library("caret")
+
+library("reshape2")
+library("patchwork")
+```
+
+
+Note:
+
+1. No user is using multiple device.
+2. Users stay in the same location.
+3. All songs are finished before going to the next song.
+4. There is no "remove from Playlist" record.
+5. Only users who canceled the service are considered as churned. Free users with no activities are not considered as churned.
+6. We only have data from 10/1/2018 to 12/1/2018
+
+
+
+
+```{r}
+df <- read.csv("sparkify-medium.csv", stringsAsFactors = FALSE, row.names=1)
+```
+
+
+The time of registration for the records of a few users are incorrect (the time of registration is after the user's first log in).
+Correct the time of registration using the "Submit Registration" page and the session ID
+
+```{r}
+regist_df <- filter(df,df$page=="Submit Registration")
+
+for (i in c(1:nrow(regist_df))) {
+  temp_df <- df %>% 
+                filter(sessionId==regist_df$sessionId[i]) %>%
+                filter(!is.na(userId)) %>% 
+                mutate(delta=abs(ts-regist_df$ts[i])) %>% 
+                arrange(delta,desc=FALSE)
+
+  df[!is.na(df$userId) & df$userId==temp_df$userId[1],"registration"] <- regist_df$ts[i]
+}
+```
+
+Filter out the guest records (the ones without a userId)
+
+```{r}
+df <- filter(df,!is.na(userId))
+```
+
+Simplify the user Agent to represent the type of device that the user is using.
+
+```{r}
+df$userAgent[str_detect(df$userAgent,"Macintosh")] <- "Macintosh"
+df$userAgent[str_detect(df$userAgent,"iPad")] <- "iPad"
+df$userAgent[str_detect(df$userAgent,"iPhone")] <- "iPhone"
+df$userAgent[str_detect(df$userAgent,"Windows")] <- "Windows"
+df$userAgent[str_detect(df$userAgent,"Linux")] <- "Linux"
+```
+
+Select a subset of the activities that may be significant predictors. 
+Activities such as going to the home page or setting page that seem to be insignificant are excluded.
+
+```{r}
+selected_pages <- c("NextSong","Roll Advert","Add Friend","Thumbs Up",
+                    "Add to Playlist", "Upgrade", "Submit Upgrade", "Error",
+                    "Thumbs Down","Cancel", "Cancellation Confirmation",
+                    "Downgrade", "Submit Downgrade","Submit Registration")
+df <- df[df$page %in% selected_pages,]
+```
+
+Convert some categorical variables in to factors.
+
+```{r}
+factor_columns <- c("page","auth","method","status","level","gender","userAgent")
+
+df[factor_columns] <- lapply(df[factor_columns], factor)
+```
+
+Remove some variables that are not used in our analysis
+```{r}
+df$home <- NULL
+df$method <- NULL
+df$status <- NULL
+df$itemInSession <- NULL
+df$location <- NULL
+df$lastName <- NULL
+df$firstName <- NULL
+df$auth <- NULL
+```
+
+
+Create a new variable indicating whether it is a song that the user never listened before.
+
+```{r}
+df <- arrange(df, ts,desc=FALSE)
+df$user_song <- paste0(df$userId, df$artist, df$song)
+temp <- df %>% group_by(user_song) %>% mutate(count=row_number())
+df$new_song <- temp$count
+temp <- NULL
+df$user_song <- NULL
+df$new_song[df$new_song > 1] <- 0
+df$new_song[is.na(df$song)] <- NA
+```
+
+
+Create a new variable indicating the Monday of the week that the activity happened
+
+```{r}
+df$ts <- df$ts/1000
+df$registration <- df$registration/1000
+df$week_reg <- 0
+
+begin_ts <- 1538352000
+end_ts <- 1543795199
+
+for (ts in seq(begin_ts, end_ts, 604800)) {
+  temp <- between(df$ts,ts,ts+604799)
+  df$week_begins[temp] <- as.Date(as.POSIXct(ts, origin="1970-01-01"))
+  df$week_reg[between(df$registration,ts,ts+604799) & temp] <- 1
+}
+df$week_begins <- as.Date(df$week_begins,origin="1970-01-01")
+```
+
+Convert the time stamp of the activity and the time of registration in to a Date
+
+```{r}
+df$date <- as.Date(as.POSIXct(df$ts, origin="1970-01-01"))
+df$registration <- as.Date(as.POSIXct(df$registration, origin="1970-01-01"))
+```
+
+
+
+Aggregate the number of each activity by week
+
+```{r}
+page_df <- df %>% group_by(userId,week_begins) %>% 
+  count(page) %>% 
+  spread(page, n, fill = 0)
+page_df$NextSong <- NULL
+page_df$Cancel <- NULL
+
+page_df[,3:ncol(page_df)] <- sapply(page_df[,3:ncol(page_df)], as.integer)
+```
+
+Aggregate the number of active sessions, the number of active days, the number of songs listened, the number of new songs listened by week.
+For each weekly record, include the following information:
+
+* The date of registration
+* The user level (free/paid) at the beginning of the week
+* The user level (free/paid) at the end of the week
+* Gender
+* userAgent (the type of device)
+* Indicator whether the user register during the week
+* Time stamp of the last activity of the user during the week 
+
+```{r message=FALSE, warning=FALSE}
+user_df <- df %>% filter(!is.na(song)) %>% 
+  arrange(ts, desc=FALSE) %>% 
+  group_by(userId,week_begins) %>% 
+  summarise(active_sessions=n_distinct(sessionId),
+            active_days=n_distinct(date),
+            songs_listened=n(),
+            new_songs_listened=sum(new_song),
+            registration=first(registration),
+            start_level=first(level),
+            end_level=last(level),
+            gender=first(gender),
+            userAgent=first(userAgent),
+            week_reg=first(week_reg),
+            last_active=last(ts))
+```
+
+Combine the user's weekly activities in to one data frame and modify the variable names
+
+```{r}
+prepared_df <- merge(user_df, page_df, by=c("userId","week_begins")) %>% 
+                arrange(userId, week_begins)
+
+names(prepared_df) <- str_replace_all(names(prepared_df), " ", "_")
+```
+
+
+For each user, find out the beginning of the first week of the observations (2018-10-01 or the week of registration)
+and the beginning of the last week of the observations (2018-11-26 or the week of cancellation)
+
+```{r}
+obs_df <- data.frame(userId=unique(prepared_df$userId))
+obs_df$start <- as.Date(as.POSIXct(1538352000, origin="1970-01-01"))
+obs_df$end <- as.Date(as.POSIXct(1543190400, origin="1970-01-01"))
+temp <- prepared_df[prepared_df$week_reg == 1,c("userId","week_begins")]
+obs_df$start[obs_df$userId %in% temp$userId] <- temp$week_begins
+temp <-prepared_df[prepared_df$Cancellation_Confirmation == 1,c("userId","week_begins")]
+obs_df$end[obs_df$userId %in% temp$userId] <- temp$week_begins
+
+obs_df
+```
+
+Create a record per week of observation per user. 
+The user activity data frame only has the records of the weeks with activities. 
+We will use this data frame to include the weeks with no activity.
+
+```{r}
+all_period_df <- data.frame(userId=NA, week_begins=NA)
+
+cursor <- 1
+for (i in c(1:nrow(obs_df))) {
+    for (date in seq(obs_df$start[i], obs_df$end[i], 7)) {
+        all_period_df[cursor,] <- c(obs_df$userId[i], as.Date(date, origin="1970-01-01"))
+         cursor = cursor + 1
+    }
+}
+
+all_period_df$userId <- as.integer(all_period_df$userId)
+all_period_df$week_begins <- as.Date(all_period_df$week_begins, origin="1970-01-01")
+
+all_period_df
+```
+
+
+Perform a left join merging, the result data frame has records of the weeks with activities and the weeks without activities.
+
+```{r}
+prepared_df <- merge(all_period_df, prepared_df, by=c("userId","week_begins"), all.x = TRUE)
+prepared_df
+```
+
+
+Filling the NA's
+
+```{r}
+prepared_df<- prepared_df %>% 
+  group_by(userId) %>%
+  fill(end_level,.direction = "down") %>% 
+  fill(gender,.direction = "updown") %>% 
+  fill(userAgent,.direction = "updown") %>% 
+  fill(registration,.direction = "updown") %>% 
+  fill(start_level,.direction = "up")
+
+prepared_df$end_level[is.na(prepared_df$end_level)]<-prepared_df$start_level[is.na(prepared_df$end_level)]
+prepared_df$start_level <- NULL
+
+prepared_df$last_active[is.na(prepared_df$last_active) & prepared_df$week_begins == "2018-10-01"] <- 1538352000
+
+prepared_df <- prepared_df %>%
+    group_by(userId) %>%
+    fill(last_active,.direction = "down") %>% 
+    mutate(last_active = dplyr::lag(last_active, n = 1, default = 1538352000))
+
+for (i in c(1:ncol(prepared_df))) {
+  if (any(is.na(prepared_df[,i]))) {
+    prepared_df[is.na(prepared_df[,i]),i] <- 0
+  }
+}
+prepared_df
+```
+Create a new variable to indicate the number of days from the time of the last activity (2018-10-01 for the first week if the user registered before that) to the beginning of the week
+
+```{r}
+prepared_df$inactive_days <- round((as.numeric(as.POSIXct(prepared_df$week_begins)) - prepared_df$last_active)/(3600*24),2)
+prepared_df$last_active <- NULL
+```
+
+Create a new variable to indicate the number of full weeks from the day of registration to the beginning of the week
+
+```{r}
+prepared_df$weeks_since_reg <- as.numeric(floor((prepared_df$week_begins-prepared_df$registration)/7))
+
+prepared_df$weeks_since_reg[prepared_df$weeks_since_reg<0] <- 0
+prepared_df$registration <- NULL
+```
+
+
+There are some users that cancel their service in the first week of observations. We have no previous observations to explain why this happened. We will excluded these records in our analysis.
+
+```{r}
+one_week_active <- prepared_df %>% group_by(userId) %>% 
+  summarise(activate_weeks=n()) %>% 
+  filter(activate_weeks==1)
+
+filter(prepared_df, userId %in% one_week_active$userId)
+```
+
+Modify the cancellation indicator. Instead of indicating whether the user cancel the service **during the week**, it will indicate whether the user will cancel the service **during the next week**.
+
+```{r}
+prepared_df$cancel <- 0
+
+prepared_df[!prepared_df$userId %in% one_week_active$userId,"cancel"] <- 
+  c(prepared_df$Cancellation_Confirmation[!prepared_df$userId %in% one_week_active$userId][-1],0)
+
+prepared_df <- filter(prepared_df, Cancellation_Confirmation != 1)
+
+prepared_df$Cancellation_Confirmation <- NULL
+prepared_df$week_reg <- NULL
+
+prepared_df <- filter(prepared_df, !userId %in% one_week_active$userId)
+
+prepared_df$cancel <- as.factor(prepared_df$cancel)
+
+
+prepared_df$new_songs_listened[prepared_df$songs_listened != 0] <- 
+  prepared_df$new_songs_listened[prepared_df$songs_listened != 0] / 
+  prepared_df$songs_listened[prepared_df$songs_listened != 0]
+
+```
+
+
+The following is our final prepared data. The data includes:
+
+* userId: the Id number of the user
+* week_begins: the date of the beginning of the week (Monday)
+* active_sessions: the number of distinct sessions during the week
+* active_days: the number of days with activities during the week
+* songs_listended: the number of songs listended during the week
+* new_songs_listened: the percentage of the songs listended that are new songs
+* end_level: the user level (free/paid) at the end of the week
+* gender: the gender of the user
+* userAgent: the device that the user is using
+* Add_Friend: the number of friends added during the week
+* Add_to_Playlist: the number of songs added to the playlist during the week
+* Downgrade: the number of times that the user entered the downgrade page during the week
+* Error: the number of times that the user encountered an error during the week
+* Roll_Advert: the number of advertisement played during the week
+* Submit_Downgrade: indicates whether the user down-graded from paid to free during the week
+* Submit_Upgrade: indicates whether the user up-graded from free to paid during the week
+* Thumbs_Down: the number of thumbs down during the week
+* Thumbs_Up: the number of thumbs up during the week
+* Upgrade: the number of times that the user entered the upgrade page during the week
+* inactive_days: the number of days from the user's laster activity to the beginning of the week
+* weeks_since_reg: the number of **full weeks** from the date of registration to the beginning of the week
+* cancel: indicates whether the user cancel the service **during the next week**
+
+
+```{r}
+prepared_df
+```
+
+```{r}
+summary(prepared_df)
+```
+
+
+Separate the data into two dataframes. One for the weeks with activities and another one for the weeks with no activities.
+We will build two separate models for the two scenarios
+
+```{r}
+active_train <- filter(prepared_df, songs_listened !=0 & week_begins != "2018-11-26")
+inactive_train <- filter(prepared_df, songs_listened ==0 & week_begins != "2018-11-26")
+
+active_evaluation <- filter(prepared_df, songs_listened !=0 & week_begins == "2018-11-26")
+inactive_evaluation <- filter(prepared_df, songs_listened ==0 & week_begins == "2018-11-26")
+
+
+
+active_train$userId <- NULL
+active_train$week_begins <- NULL
+active_evaluation$userId <- NULL
+active_evaluation$week_begins <- NULL
+inactive_train <- inactive_train[,c("inactive_days","weeks_since_reg", "end_level", "gender","userAgent","cancel")]
+inactive_evaluation <- inactive_evaluation[,c("inactive_days","weeks_since_reg", "end_level", "gender","userAgent","cancel")]
+```
+
+
+
+Box plot for the data with activities
+
+```{r fig.height=8, fig.width=10, warning=FALSE}
+predictors <- names(active_train)
+categrical_predictors <- c("end_level", "gender", "userAgent")
+numeric_predictors <- predictors[!predictors %in% categrical_predictors]
+
+
+data.m <- melt(active_train[numeric_predictors], id.vars = 'cancel')
+ggplot(data.m, aes(x = variable, y = value, fill = cancel)) + geom_boxplot() + 
+  facet_wrap(~ variable, scales = 'free') + theme_classic()
+```
+
+Distribution plot for the data with activities
+
+```{r fig.height=10, fig.width=10, warning=FALSE}
+plot_active_sessions <- ggplot(active_train, aes(x=active_sessions, color=cancel)) + geom_density(na.rm =TRUE)
+plot_active_days <- ggplot(active_train, aes(x=active_days, color=cancel)) + geom_density(na.rm =TRUE)
+plot_songs_listened <- ggplot(active_train, aes(x=songs_listened, color=cancel)) + geom_density(na.rm =TRUE)
+plot_new_songs_listened <- ggplot(active_train, aes(x=new_songs_listened, color=cancel)) + geom_density(na.rm =TRUE)
+plot_weeks_since_reg <- ggplot(active_train, aes(x=weeks_since_reg, color=cancel)) + geom_density(na.rm =TRUE)
+plot_Add_Friend <- ggplot(active_train, aes(x=Add_Friend, color=cancel)) + geom_density(na.rm =TRUE)
+plot_Add_to_Playlist <- ggplot(active_train, aes(x=Add_to_Playlist, color=cancel)) + geom_density(na.rm =TRUE)
+plot_Downgrade <- ggplot(active_train, aes(x=Downgrade, color=cancel)) + geom_density(na.rm =TRUE)
+plot_Error<- ggplot(active_train, aes(x=Error, color=cancel)) + geom_density(na.rm =TRUE)
+plot_Roll_Advert <- ggplot(active_train, aes(x=Roll_Advert, color=cancel)) + geom_density(na.rm =TRUE)
+plot_Submit_Downgrade <- ggplot(active_train, aes(x=Submit_Downgrade, color=cancel)) + geom_density(na.rm =TRUE)
+plot_Submit_Upgrade <- ggplot(active_train, aes(x=Submit_Upgrade, color=cancel)) + geom_density(na.rm =TRUE)
+plots_Thumbs_Down <- ggplot(active_train, aes(x=Thumbs_Down, color=cancel)) + geom_density(na.rm =TRUE)
+plots_Thumbs_Up <- ggplot(active_train, aes(x=Thumbs_Up, color=cancel)) + geom_density(na.rm =TRUE)
+plots_Upgrade <- ggplot(active_train, aes(x=Upgrade, color=cancel)) + geom_density(na.rm =TRUE)
+plots_inactive_days <- ggplot(active_train, aes(x=inactive_days, color=cancel)) + geom_density(na.rm =TRUE)
+
+
+plot_active_sessions+plot_active_days+plot_songs_listened+plot_new_songs_listened+
+  plot_weeks_since_reg+plot_Add_Friend+plot_Add_to_Playlist+plot_Downgrade+
+  plot_Error+plot_Roll_Advert+plot_Submit_Downgrade+plot_Submit_Upgrade+
+  plots_Thumbs_Down+plots_Thumbs_Up+plots_Upgrade+plots_inactive_days+
+  plot_layout(ncol = 4, guides = "collect")
+```
+
+
+
+
+
+Up sampling
+
+```{r}
+temp <- active_train %>% filter(active_train$cancel == 1) %>% 
+      slice(rep(1:n(), 
+            round(nrow(filter(active_train, cancel == 0))/
+                    nrow(filter(active_train, cancel == 1)),0)-1))
+active_train_up <- bind_rows(active_train, temp)
+
+temp <- inactive_train %>% filter(inactive_train$cancel == 1) %>% 
+      slice(rep(1:n(), 
+            round(nrow(filter(inactive_train, cancel == 0))/
+                    nrow(filter(inactive_train, cancel == 1)),0)-1))
+inactive_train_up <- bind_rows(inactive_train, temp)
+
+temp <- NULL
+```
+
+
+
+
+
+Model for the weeks with activities
+
+```{r}
+active_logi <- glm(cancel~.,family = binomial, active_train_up)
+```
+
+
+```{r}
+summary(active_logi)
+```
+
+
+
+Performance evaluation using the up-sampled data
+
+```{r}
+predicted_class <- ifelse(active_logi$fitted.values>0.5,1,0)
+confusion_matrix <- confusionMatrix(as.factor(predicted_class),
+                                      active_train_up$cancel,
+                                    mode = "everything",positive = "1")
+confusion_matrix
+```
+Performance evaluation using the pre-up-sampled data
+
+```{r}
+predicted_class <- ifelse(predict(active_logi,active_train,type="response")>0.5,1,0)
+confusion_matrix <- confusionMatrix(as.factor(predicted_class),
+                                      active_train$cancel,
+                                    mode = "everything",positive = "1")
+confusion_matrix
+```
+Model for the weeks with no activities
+
+```{r}
+inactive_logi <- glm(cancel~.,family = binomial, inactive_train_up)
+```
+
+```{r}
+summary(inactive_logi)
+```
+
+Performance evaluation using the up-sampled data
+
+```{r}
+predicted_class <- ifelse(inactive_logi$fitted.values>0.5,1,0)
+confusion_matrix <- confusionMatrix(as.factor(predicted_class),
+                                      inactive_train_up$cancel,
+                                    mode = "everything",positive = "1")
+confusion_matrix
+```
+Performance evaluation using the pre-up-sampled data
+
+
+```{r}
+predicted_class <- ifelse(predict(inactive_logi,inactive_train,type="response")>0.5,1,0)
+confusion_matrix <- confusionMatrix(as.factor(predicted_class),
+                                      inactive_train$cancel,
+                                    mode = "everything",positive = "1")
+confusion_matrix
+```
+
+
+

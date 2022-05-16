@@ -1,0 +1,704 @@
+---
+title: "DATA_621_HW3"
+author: "Chi Pong, Euclid Zhang, Jie Zou, Joseph Connolly, LeTicia Cancel"
+date: "3/14/2022"
+output:
+  pdf_document: default
+  html_document:
+    df_print: paged
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r include=FALSE}
+library("corrplot")
+library("MASS")
+library("ggplot2")
+library("patchwork")
+library("faraway")
+library("car")
+library("pROC")
+library("caret")
+library("dplyr")
+library("reshape2")
+
+```
+
+
+```{r}
+train_df <- read.csv("https://raw.githubusercontent.com/ezaccountz/DATA_621/main/HW3/crime-training-data_modified.csv")
+test_df <- read.csv("https://raw.githubusercontent.com/ezaccountz/DATA_621/main/HW3/crime-evaluation-data_modified.csv")
+```
+
+
+# DATA EXPLORATION
+
+## * **Data Summary**
+
+```{r}
+summary(train_df)
+```
+From the summary:
+
+* We see that there is **no missing value**
+* All numeric variables, except **zn**, the max value is not significantly off from the third quartile. This indicates that they have no extream outliers. We will need to look at the distribution of **zn** to check the outliers. 
+
+
+## * **Box Plots**
+
+```{r fig.height=6, fig.width=10}
+data.m <- melt(train_df, id.vars = 'target')%>% mutate(target = as.factor(target))
+ggplot(data.m, aes(x = variable, y = value, fill = target)) + geom_boxplot() + 
+  facet_wrap(~ variable, scales = 'free') + theme_classic()
+```
+
+From the boxplots, the following predictors seem to be good candidates differentiating target = 0 and target = 1:
+* **zn**
+* **indus**
+* **nox**
+* **age**
+* **dis**
+* **rad**
+* **tax**
+
+Most of the predictors seem to have a different distribution for target = 0 and target = 1. 
+Let's check the distributions of the predictors:
+
+
+## * **Distribution plots**
+
+```{r fig.height=6, fig.width=10}
+target_factored <- as.factor(train_df$target)
+
+plot_zn <- ggplot(train_df, aes(x=zn, color=target_factored)) + geom_density()
+plot_indus <- ggplot(train_df, aes(x=indus, color=target_factored)) + geom_density()
+plot_nox <- ggplot(train_df, aes(x=nox, color=target_factored)) + geom_density()
+plot_rm <- ggplot(train_df, aes(x=rm, color=target_factored)) + geom_density()
+plot_age <- ggplot(train_df, aes(x=age, color=target_factored)) + geom_density()
+plot_dis <- ggplot(train_df, aes(x=dis, color=target_factored)) + geom_density()
+plot_rad <- ggplot(train_df, aes(x=rad, color=target_factored)) + geom_density()
+plot_tax <- ggplot(train_df, aes(x=tax, color=target_factored)) + geom_density()
+plot_prtatio <- ggplot(train_df, aes(x=ptratio, color=target_factored)) + geom_density()
+plot_lstat <- ggplot(train_df, aes(x=lstat, color=target_factored)) + geom_density()
+plots_medv <- ggplot(train_df, aes(x=medv, color=target_factored)) + geom_density()
+
+plot_zn+plot_indus+plot_nox+plot_rm+plot_age+plot_dis+plot_rad+plot_tax+
+  plot_prtatio+plot_lstat+plots_medv+plot_layout(ncol = 4, guides = "collect")
+```
+
+**zn** is zero-inflated for target = 1. We may want to add or transform it into a dummy variable indicating **zn** is greater than 0 or not.
+**lstat** and **medv** are right-skewed for both target = 0 and target = 1, we may consider a log-transformation. For other numeric variables, we may check later if transformations are needed.
+
+
+## * **Correlations**
+
+Now let's look at the correlations between the variables  
+```{r fig.height=10, fig.width=10}
+corrplot(cor(train_df, use = "na.or.complete"), method = 'number', 
+         type = 'lower', diag = FALSE, tl.srt = 0.1)
+```
+
+We see that **rad** and **tax** have strong correlation. 
+
+Let's take a look at the linear plot of the two variables
+
+```{r}
+plot(jitter(train_df$rad),jitter(train_df$tax), xlab="rad", ylab="tax")
+abline(lm (train_df$tax ~ train_df$rad))
+```
+We can see that the correlation is strongly influenced by one point, where **rad** = 24.
+
+Without **rad**, the correlation is only,
+
+```{r}
+cor(train_df[train_df$rad < 20,"rad"],train_df[train_df$rad < 20,"tax"])
+```
+In this case, we will not remove **rad** or **tax** from our model, but we will need to be cautious of the t-statistics of the two in our models.
+
+
+
+# DATA PREPARATION
+
+From the density plot of **zn**, we know that the variable is zero-inflated. The percentage of 0 values is
+
+```{r}
+nrow(train_df[train_df$zn==0,])/nrow(train_df)
+```
+Let's check the distribution of the **zn** without the 0 values
+
+```{r}
+plot(density(train_df[train_df$zn>0,]$zn,na.rm=TRUE), main = "zn > 0")
+```
+The distribution looks a lot better.  
+We will add a new dummy variable zn_y indicating if **zn** is >0. The interaction **zn x zn_y = zn** so we don't need to do anything to it. If **zn_y** is deemed to be insignificant by our models, then we can simply drop it.
+
+
+```{r}
+train_df$zn_y <- 0
+train_df$zn_y[train_df$zn>0] <- 1
+```
+
+
+According to the text book *A Modern Approach To Regression With R*, "when the predictor variable X has a Poisson distribution, the log odds are a linear function of x". Let's check if any of the predictors follows a Poisson distribution
+
+```{r}
+#Method of possion distribution test is from https://stackoverflow.com/questions/59809960/how-do-i-know-if-my-data-fit-a-poisson-distribution-using-r
+
+#two tail test
+p_poisson <- function(x) {
+  return (1-2 * abs((1 - pchisq((sum((x - mean(x))^2)/mean(x)), length(x) - 1))-0.5))
+}
+
+predictors <- colnames(train_df)
+predictors <- predictors[!predictors %in% c("target","chas","zn_y")]
+
+data.frame(mean_target0 = round(apply(train_df[train_df$target==0,predictors],2,mean),2), 
+    variance_target0 = round(apply(train_df[train_df$target==0,predictors],2,var),2),
+    p_poisson_target0 = round(apply(train_df[train_df$target==0,predictors],2,p_poisson),2),
+    mean_target1 = round(apply(train_df[train_df$target==1,predictors],2,mean),2), 
+    variance_target1 = round(apply(train_df[train_df$target==1,predictors],2,var),2),
+    p_poisson_target1 = round(apply(train_df[train_df$target==1,predictors],2,p_poisson),2))
+```
+The null hypothesis in the tests is that the variable follows a poision distribution.
+Based on the p-values, we reject the null hypothesis for all predictors. None of the predictors follows a poisson distribution for both target = 0 and target = 1
+  
+  
+  
+Let's look at the distributions plots again.
+
+```{r fig.height=6, fig.width=10}
+plot_zn+plot_indus+plot_nox+plot_rm+plot_age+plot_dis+plot_rad+plot_tax+
+  plot_prtatio+plot_lstat+plots_medv+plot_layout(ncol = 4, guides = "collect")
+```
+
+The distributions for rm with target = 0 and target = 1 are approximately normal with the same variance. Hence would not transform the variable
+The distributions for lstat and medv are skewed for both target = 0 and target = 1, we will add a log-transformed variable for each of them.
+
+```{r}
+train_df$log_lstat <- log(train_df$lstat)
+train_df$log_medv <- log(train_df$medv)
+```
+
+The distributions for indus, nox, age, dis, tax, ptratio look significantly different for the target values. Let perform a anova tests on the single predictor models to see if adding a log transformed or a quadratic transformed variable will improve the performance.
+
+
+**Quadratic transformation test:**
+
+```{r message=FALSE, warning=FALSE}
+predictors <- c("indus", "nox", "age", "dis", "tax", "ptratio")
+
+n <- length(predictors)
+
+model_compare <- data.frame(
+    model_1 = paste0("target~",predictors),
+    model_2 = paste0("target~",predictors,"+I(",predictors,"^2)"),
+    Diff_DF = rep(0,n),
+    Diff_Deviance = rep(0.0000,n),
+    Pr_Gt_Chi = rep(0.0000,n)
+)
+
+for (i in (1:n)) {
+    test_model_1 <- glm(target~train_df[,predictors[i]],family = binomial, train_df)
+    test_model_2 <- glm(target~train_df[,predictors[i]]+
+                          I(train_df[,predictors[i]]^2),family = binomial, train_df)
+    anova_test <- anova(test_model_1,test_model_2,test="Chi")
+    model_compare[i,3] <- anova_test$Df[2]
+    model_compare[i,4] <- round(anova_test$Deviance[2],2)
+    model_compare[i,5] <- round(anova_test$`Pr(>Chi)`[2],6)
+}
+
+model_compare
+```
+
+**Log transformation test:**
+
+```{r message=FALSE, warning=FALSE}
+predictors <- c("indus", "nox", "age", "dis", "tax", "ptratio")
+
+n <- length(predictors)
+
+model_compare <- data.frame(
+    model_1 = paste0("target~",predictors),
+    model_2 = paste0("target~",predictors,"+I(log(",predictors,"))"),
+    Diff_DF = rep(0,n),
+    Diff_Deviance = rep(0.0000,n),
+    Pr_Gt_Chi = rep(0.0000,n)
+)
+
+for (i in (1:n)) {
+    test_model_1 <- glm(target~train_df[,predictors[i]],family = binomial, train_df)
+    test_model_2 <- glm(target~train_df[,predictors[i]]+
+                          I(log(train_df[,predictors[i]])),family = binomial, train_df)
+    anova_test <- anova(test_model_1,test_model_2,test="Chi")
+    model_compare[i,3] <- anova_test$Df[2]
+    model_compare[i,4] <- round(anova_test$Deviance[2],2)
+    model_compare[i,5] <- round(anova_test$`Pr(>Chi)`[2],6)
+}
+
+model_compare
+```
+
+For indus, the improvement is bigger by adding the squared term. For ptratio, since the distribution is left-skewed, it may be better to add the squared term. For other variables, no transformation is added.
+
+
+```{r}
+train_df$indus_squared <- train_df$indus^2
+train_df$ptratio_squared <- train_df$ptratio^2
+```
+
+
+**Interaction term test:**
+
+**chas** is a dummy variable. We will perform a anova tests on the single predictor models to see if adding an interaction between **chas** and a predictor will improve the model.
+
+```{r warning=FALSE}
+predictors <- colnames(train_df)
+predictors <- predictors[!predictors %in% c("target","chas","zn_y","log_lstat",
+                                            "log_medv","indus_squared",
+                                            "ptratio_squared")]
+
+interaction_test <- data.frame(matrix(ncol = 3, nrow = 0))
+colnames(interaction_test) <- c("Preditor","Interaction","Pr_Gt_Chi")
+class(interaction_test$Pr_Gt_Chi) = "Numeric"
+
+for (predictor in predictors) {
+  interaction_test[nrow(interaction_test) + 1,] <- 
+    c(predictor, paste0(predictor, ":chas"), 
+      round(anova(glm(target ~ train_df[,predictor]*chas,data = train_df, 
+                      family = "binomial"),test="Chi")[4,5],4))
+}
+```
+```{r}
+interaction_test
+```
+
+From the result, we will add an interaction between **tax** and **chas** and an interaction between **rad** and **chas** to our preditor candidates.
+```{r}
+train_df$tax_chas <- train_df$tax * train_df$chas
+train_df$rad_chas <- train_df$rad * train_df$chas
+```
+
+# BUILD MODELS
+
+## * **1. Full model:**
+
+The full model includes all original and the transformed verson of the predictors
+
+```{r warning=FALSE}
+full_model <- glm(target~.,family = binomial, train_df)
+
+#store the model formulas for buidling models for cross validation
+model_formulas <- c(paste(deparse(formula(full_model), width.cutoff = 500), collapse=""))
+```
+
+```{r}
+summary(full_model)
+```
+
+
+## * **2. Backward Elimination by AIC:**
+
+Starting with our full model, perform backward elimination by comparing the AIC of the models. 
+
+```{r warning=FALSE}
+model_AIC <- step(full_model, trace=0)
+model_formulas <- c(model_formulas, paste(deparse(formula(model_AIC), 
+                                                  width.cutoff = 500), collapse=""))
+```
+
+The result model is:
+
+```{r}
+summary(model_AIC)
+```
+
+
+## * **3. Backward Elimination with Chi-square test:**
+
+Starting with our full model, perform backward elimination with Chi-square test.
+
+```{r warning=FALSE}
+#Define a function to perform backward elimination with Chi-square test 
+#using the significancy / alpha as one of the parameters
+
+backward_chi <- function (train_df, significancy) {
+  glm_string <- "target~."
+  glm_formula <- as.formula(glm_string)
+  
+  repeat{
+    drop1_chi <- drop1(glm(glm_formula, family=binomial, train_df), test="Chi")
+  
+    chi_result <- data.frame(preditors = rownames(drop1_chi)[-1],
+             p_value = drop1_chi[-1,5])
+    chi_result <- chi_result[order(chi_result$p_value,decreasing=TRUE),]
+    
+    if(chi_result[1,2] < significancy){
+        break
+    }
+    else {
+        glm_string <- paste0(glm_string,"-",chi_result[1,1])
+        glm_formula <- as.formula(glm_string)
+    }
+  }
+
+  return(glm_formula)
+}
+
+```
+
+**model with alpha 0.1 (based on Chi-square test)**
+
+```{r warning=FALSE}
+model_chi_0.1 <- backward_chi(train_df, 0.1)
+model_formulas <- c(model_formulas, model_chi_0.1)
+model_chi_0.1 <- glm(model_chi_0.1, family=binomial, train_df) 
+
+summary(model_chi_0.1)
+```
+
+**model with alpha 0.05 (based on Chi-square test)**
+
+```{r warning=FALSE}
+model_chi_0.05 <- backward_chi(train_df, 0.05)
+model_formulas <- c(model_formulas, model_chi_0.05)
+model_chi_0.05 <- glm(model_chi_0.05, family=binomial, train_df) 
+summary(model_chi_0.05)
+```
+
+**model with alpha 0.001 (based on Chi-square test)**
+
+```{r warning=FALSE}
+model_chi_0.001 <- backward_chi(train_df, 0.001)
+model_formulas <- c(model_formulas, model_chi_0.001)
+model_chi_0.001 <- glm(model_chi_0.001, family=binomial, train_df) 
+summary(model_chi_0.001)
+```
+
+
+## * **4. Backward Elimination based on the t-values of the coefficients:**
+
+Starting with our full model, perform backward elimination based on the t-values of the coefficients.
+
+```{r warning=FALSE}
+#Define a function to perform backward elimination based on the t-values of the coefficients
+#using the significancy / alpha as one of the parameters
+
+backward_p <- function (train_df, significancy) {
+  glm_string <- "target~."
+  glm_formula <- as.formula(glm_string)
+  
+  repeat{
+    model_p <- glm(glm_formula, family=binomial, train_df)  
+  
+    p_result <- data.frame(preditors = rownames(summary(model_p)$coefficients)[-1],
+             p_value = summary(model_p)$coefficients[-1,4])
+    p_result <- p_result[order(p_result$p_value,decreasing=TRUE),]
+    
+    
+    if(p_result[1,2] < significancy){
+        break
+    }
+    else {
+        glm_string <- paste0(glm_string,"-",p_result[1,1])
+        glm_formula <- as.formula(glm_string)
+    }
+  }
+
+  return(glm_formula)
+}
+```
+
+
+**model with alpha 0.05 (based on the t-values of the coefficients)** 
+
+alpha = 0.1 produces the same model as alpha = 0.05 so alpha = 0.1 is not used here.
+
+```{r warning=FALSE}
+model_p_0.05 <- backward_p(train_df, 0.05)
+model_formulas <- c(model_formulas, model_p_0.05)
+model_p_0.05 <- glm(model_p_0.05, family=binomial, train_df) 
+summary(model_p_0.05)
+```
+
+**model with alpha 0.01 (based on the t-values of the coefficients)** 
+
+```{r warning=FALSE}
+model_p_0.01 <- backward_p(train_df, 0.01)
+model_formulas <- c(model_formulas, model_p_0.01)
+model_p_0.01 <- glm(model_p_0.01, family=binomial, train_df) 
+summary(model_p_0.01)
+```
+
+**model with alpha 0.001 (based on the t-values of the coefficients)** 
+
+```{r warning=FALSE}
+model_p_0.001 <- backward_p(train_df, 0.001)
+model_formulas <- c(model_formulas, model_p_0.001)
+model_p_0.001 <- glm(model_p_0.001, family=binomial, train_df) 
+summary(model_p_0.001)
+```
+
+
+# SELECT MODELS
+
+First, let's compare different metrics of all models we have built
+
+```{r}
+models <- list(full_model, model_AIC, model_chi_0.1, model_chi_0.05, model_chi_0.001, 
+               model_p_0.05, model_p_0.01, model_p_0.001)
+model_names <- list("full_model", "model_AIC", "model_chi_0.1", "model_chi_0.05", 
+                    "model_chi_0.001","model_p_0.05", "model_p_0.01", "model_p_0.001")
+
+model_compare <- data.frame(
+    model = rep("",length(models)),
+    Deviance = rep(0.0000,length(models)),
+    AIC = rep(0.0000,length(models)),
+    Accuracy = rep(0.0000,length(models)),
+    Sensitivity = rep(0.0000,length(models)),
+    Specificity = rep(0.0000,length(models)),
+    Precision = rep(0.0000,length(models)),
+    F1 = rep(0.0000,length(models)),
+    AUC = rep(0.0000,length(models)),
+    Nagelkerke_R_squared = rep(0.0000,length(models))
+)
+```
+
+```{r message=FALSE, warning=FALSE}
+for (i in c(1:length(models))) {
+  predicted_class <- ifelse(models[[i]]$fitted.values>0.5,1,0)
+  confusion_matrix <- confusionMatrix(as.factor(predicted_class),
+                                      as.factor(train_df$target),positive = "1")
+
+  model_compare[i,1] <- model_names[i]
+  model_compare[i,2] <- round(models[[i]]$deviance,4)
+  model_compare[i,3] <- models[[i]]$aic
+  model_compare[i,4] <- confusion_matrix$overall[1]
+  model_compare[i,5] <- confusion_matrix$byClass[1]
+  model_compare[i,6] <- confusion_matrix$byClass[2]
+  model_compare[i,7] <- confusion_matrix$byClass[3]
+  model_compare[i,8] <- 2*confusion_matrix$byClass[1]*confusion_matrix$byClass[3]/
+                        (confusion_matrix$byClass[1]+confusion_matrix$byClass[3])
+  model_compare[i,9] <- auc(roc(train_df$target, models[[i]]$fitted.values))
+  model_compare[i,10] <- (1-exp((models[[i]]$dev-models[[i]]$null)/
+                                     length(models[[i]]$residuals)))/
+                              (1-exp(-models[[i]]$null/length(models[[i]]$residuals)))
+  
+
+}
+model_compare
+```
+Since this is **logistic regression with binary data**, Deviance shouldn't be used to judge a model's goodness of fit. **We will mainly use AIC and the accuracy**. Depending on the business objective, we may use other metrics such as sensitivity and specificity to compare the models' performance. However, the business objective is not defined here so we simply use the accuracy. The Nagelkerke R squared is a pseudo version of the R squared, since R squared can not be used for generalized linear regression. The Nagelkerke R squared should not be used to judge the goodness of fit of a single model. It can be used to compare the fit of different models.
+
+The result shows that model_chi_0.1 has the lowest AIC and best performance in predicting the using the training data.
+The models produced based the t-values of the coefficients are not doing so well. It is reasonable since some of the predictors have high correlation with each other.
+
+The following is the confusion matrix for our best model model_chi_0.1:
+
+```{r}
+predicted_class <- ifelse(model_chi_0.1$fitted.values>0.5,1,0)
+confusion_matrix <- confusionMatrix(as.factor(predicted_class),
+                                      as.factor(train_df$target),positive = "1")
+confusion_matrix
+```
+
+
+## * **Cross Validation (5 fold)**
+
+Let's perform a cross validation on all the models we have to check if they are doing well with unseen data
+
+```{r warning=FALSE}
+models <- list(full_model, model_AIC, model_chi_0.1, model_chi_0.05, model_chi_0.001,
+               model_p_0.05, model_p_0.01, model_p_0.001)
+model_names <- list("full_model", "model_AIC", "model_chi_0.1", "model_chi_0.05",
+                    "model_chi_0.001","model_p_0.05", "model_p_0.01", "model_p_0.001")
+
+
+model_compare <- data.frame(
+    model = rep("",length(models)),
+    Accuracy_1 = rep(0.0000,length(models)),
+    Accuracy_2 = rep(0.0000,length(models)),
+    Accuracy_3 = rep(0.0000,length(models)),
+    Accuracy_4 = rep(0.0000,length(models)),
+    Accuracy_5 = rep(0.0000,length(models)),
+    Accuracy_average = rep(0.0000,length(models)),
+    AIC_1 = rep(0.0000,length(models)),
+    AIC_2 = rep(0.0000,length(models)),
+    AIC_3 = rep(0.0000,length(models)),
+    AIC_4 = rep(0.0000,length(models)),
+    AIC_5 = rep(0.0000,length(models)),
+    AIC_average = rep(0.0000,length(models))
+)
+
+```
+
+```{r warning=FALSE}
+set.seed(14)
+cv_df<-train_df[sample(nrow(train_df)),]
+folds <- cut(seq(1,nrow(cv_df)),breaks=5,labels=FALSE)
+
+#Perform 5 fold cross validation
+for(i in 1:5){
+
+    testIndexes <- which(folds==i,arr.ind=TRUE)
+    testData <- cv_df[testIndexes, ]
+    trainData <- cv_df[-testIndexes, ]
+    
+    for (j in c(1:length(models))) {
+        test_model <- glm(model_formulas[[j]], family=binomial, trainData)
+        predicted_class <- ifelse(predict(test_model,testData,type="response")>0.5,1,0)
+        confusion_matrix <- confusionMatrix(as.factor(predicted_class),
+                                       as.factor(testData$target),positive = "1")
+        model_compare[j,1+i] <- confusion_matrix$overall[1]
+        model_compare[j,7+i] <- test_model$aic
+    }
+
+
+}
+
+model_compare$model <- unlist(model_names)
+model_compare$Accuracy_average <- apply(model_compare[,c(2:6)],1,mean)
+model_compare$AIC_average <- apply(model_compare[,c(8:12)],1,mean)
+
+```
+
+```{r include=FALSE}
+#remove variables to release memory
+cv_df<- NULL
+folds <- NULL
+testIndexes <- NULL
+testData <- NULL
+trainData <- NULL
+test_model <- NULL
+predicted_class <- NULL
+predicted_class <- NULL
+```
+
+The following table shows the accuracy of predictions with the test data and the AICs of the trained model.
+
+```{r}
+model_compare
+```
+model_AIC and model_chi_0.1 have the best performance. 
+Since model_chi_0.1 is a simpler model with 15 coefficients, we select model_chi_0.1 to be our best model as it is a more *parsimonious* model
+
+```{r}
+length(model_chi_0.1$coefficients) - 1  # -1 for the intercept
+length(model_AIC$coefficients) - 1      # -1 for the intercept
+```
+Let's check our final model again.
+
+```{r}
+summary(model_chi_0.1)
+```
+*zn_y* is not so significant. However, from the distribution plots, **zn** is has strong ability to differentiate target = 0 and target = 1 when **zn** is 0. It does poorly when **zn** is 1. We should keep this in our model.
+
+For **chas** and **tax_chas**, they are highly correlated since **tax_chas** = 0 when **chas** = 0.
+The percentage of 0 in  **chas** is
+
+```{r}
+nrow(train_df[train_df$chas == 0,])/nrow(train_df)
+```
+Since they are correlated, we would not judge the two coefficients by the t-value. The Chi-square tests told us that these two variables are important to the model's performance. We will keep **chas** and **tax_chas** in our model.
+
+## * **model diagnostics**
+
+Now let's look at the marginal plots to see if our model is fitting well to the 
+training data
+
+```{r include=FALSE}
+#rebuild the model without using the formula. Formula is casuing memory problem in a loop
+model_chi_0.1 <- glm(target ~ . - rad_chas - zn - lstat - log_lstat, family=binomial, train_df)
+```
+```{r fig.height=10, fig.width=10, message=FALSE, warning=FALSE}
+marginalModelPlots(model_chi_0.1,~nox+age+dis+rad+tax+ptratio+medv,layout =c(3,3))
+```
+All variables follow nearly the same as the nonparametric estimations. 
+Our model is fitting well to the data.
+
+
+**Residual Plots**
+```{r}
+residual_df <- mutate(train_df, residuals=residuals(model_chi_0.1,type="deviance"), 
+                      linpred=predict(model_chi_0.1,type = "link"))
+gdf <- group_by(residual_df, cut(linpred, breaks=unique(quantile(linpred,(1:100)/101))))
+diagdf <- summarise(gdf, residuals=mean(residuals), linpred=mean(linpred))
+plot(residuals ~ linpred, diagdf, xlab="linear predictor",xlim=c(-20,20))
+```
+The deviance residual vs linear predictor plot shows that our model is valid. 
+The model is producing accurate predictions at the two ends.
+The errors around the match point 0 are independent and random.
+
+Let's also check the residual plots with individual predictors
+
+
+```{r fig.height=3, fig.width=3, warning=FALSE}
+
+predictors <- c("nox","age","dis","rad","tax","ptratio","medv")
+
+residual_df <- mutate(train_df, residuals=residuals(model_chi_0.1,type="deviance"))
+gg_plots <- list()
+
+for (i in c(1:length(predictors))) {
+    gdf <- group_by(residual_df, .dots = predictors[i])
+    diagdf <- summarise(gdf, residuals=mean(residuals))
+    print(ggplot(diagdf, aes_string(x=predictors[i],y="residuals")) + geom_point())
+}
+```
+
+The residuals in each plots are centered at 0, mostly independent and with roughly the same variance, except a few outliers. 
+We conclude that our model does not have notable violation against its validity. The residuals for *nox* and *dis* seems to be heteroscedastic. Given this is a logistic regression with binary data, this phenomena is acceptable.
+
+**Q-Q Plot and half normal plot**
+
+```{r}
+qqnorm(residuals(model_chi_0.1))
+```
+The Q-Q plot seems to be fine given it's a logistic regression with binary data
+
+```{r}
+halfnorm(hatvalues(model_chi_0.1))
+```
+The half normal plots shows case 14 and 37 have high leverage.
+
+
+By looking at the details of the cases, there is nothing extreme in the values.
+```{r}
+train_df[c(14,37),]
+```
+
+Additionally, the predicted link values are close to 0, which confirmed they are not outliers. We would keep them in our model training.
+```{r}
+predict(model_chi_0.1,train_df[c(14,37),], type="link")
+```
+
+## * **Evaluation data prediction**
+
+Finally, let's see how our model will predict using the evaluation data set
+
+```{r}
+test_df$zn_y <- 0
+test_df$zn_y[test_df$zn>0] <- 1
+
+test_df$indus_squared <- test_df$indus^2
+test_df$ptratio_squared <- test_df$ptratio^2
+
+test_df$log_lstat <- log(test_df$lstat)
+test_df$log_medv <- log(test_df$medv)
+
+test_df$tax_chas <- test_df$tax * test_df$chas
+test_df$rad_chas <- test_df$rad * test_df$chas 
+```
+
+```{r}
+test_df$predicted_class <- ifelse(predict(model_chi_0.1,test_df, type = "response") >0.5,1,0)
+```
+
+```{r}
+ggplot(test_df, aes(predicted_class)) + geom_bar(fill=c("orange","lightblue")) 
+```
+Both target = 0 and target = 1 are close to 50%, which is a very plausible outcomes.
+This is the same as we expected since there are 50% of the cases above the median crime rate and 50% of the cases below the median crime rate.
+
+
