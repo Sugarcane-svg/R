@@ -1,0 +1,272 @@
+---
+title: "Blog3: PCA Linear Model"
+author: "Jie Zou"
+date: "`r Sys.Date()`"
+output:
+  prettydoc::html_pretty:
+    theme: architect
+    highlight: github
+---
+
+## My Thought
+
+I was just gonna do some PCA in data transformation, but it turns out that I walk a little further, which I build a PCA linear model on the dataset from [Kaggle](https://www.kaggle.com/datasets/kuchhbhi/2022-march-laptop-data).
+
+```{r include=FALSE}
+library(dplyr)
+library(purrr)
+library(corrplot)
+library(caret)
+library(tidyr)
+library(recipes)
+library(rsample)
+```
+
+## Data Structure Overview
+
+There is 896 observation and 22 features in the data. The Majority type of features are characters and integers. In addition, it does not seem to have missing values(i.e. NA)
+
+```{r echo=FALSE}
+d <- read.csv("Cleaned_Laptop_data.csv") %>% select(-c(old_price))
+glimpse(d)
+```
+
+However, I find that there are data types of some features are not appropriate, therefore, the conversion between *integer* and *double* and the conversion between *integer* and *character* are necessary.
+
+For Example:
+
+- *ssd*: should be character because a laptop either has sdd or not, if it has it, the size of sdd is static. 
+- *hdd*: same as ssd
+- *os_bit*: the size is fixed
+- *graphic_card_gb*: same as ssd
+- *discount*: percentage of discounts
+
+
+## Data Structure After Fixing
+
+```{r echo=FALSE}
+d.copy <- d %>% 
+  mutate(ssd = as.character(d$ssd),
+                       hdd = as.character(d$hdd),
+                       os_bit = as.character(d$os_bit),
+                       graphic_card_gb = as.character(d$graphic_card_gb),
+                       discount = d$discount * 0.01)
+
+glimpse(d.copy)
+```
+
+## Examination of numerical variables
+
+**Colinearity** 
+
+only rating and reviews are highly correlated, therefore, only one of two is kept.
+
+```{r include=FALSE}
+num <- d.copy %>% select(-c(d.copy %>% keep(is.character) %>% names())) 
+```
+
+```{r echo=FALSE}
+num %>% cor() %>% corrplot(diag = FALSE, method = "number", type = "lower")
+```
+
+**Distributions**
+
+The distribution of *ratings* and *reviews* have the same pattern which indicate that they are highly correlated as well.
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+num %>% 
+  gather("var", "val") %>% 
+  ggplot(aes(x = val)) + 
+    geom_histogram() +
+    facet_wrap(~var, scales = "free") +
+    theme_classic()
+```
+
+```{r include=FALSE}
+# take out reviews
+num <- num %>% select(-c(reviews))
+d.copy <- d.copy %>% select(-c(reviews))
+```
+
+## Examination of Categorical Variables
+
+**distribution of raw data**
+
+The categorical variables looks pretty messy, even though I saw in the beginning that there is no NAs, there is plenty missing values in *processor generation* and *os* which state "Missing". Meanwhile, by examining laptop model name, there are typos everywhere in the records, and in my opinion, a laptop model is based on its configuration, or it would probably just a name. As a result I am going to leave it out.
+
+factor is better than character type in further analysis, so I am going to convert all character variable into factors
+```{r include=FALSE}
+cate <- d.copy %>% select(-c(num %>% names()))
+```
+
+```{r echo=FALSE, fig.width=10, fig.height=8}
+cate %>% 
+  gather() %>% 
+  ggplot(aes(x = value)) +
+    geom_bar() +
+    facet_wrap(~key, scales = "free") +
+    theme_classic() +
+    theme(axis.text.x = element_text(angle = 90))
+```
+
+```{r extract majority element,include=FALSE}
+# brand
+main_brand = d.copy %>% 
+  select(brand) %>% 
+  count(brand, sort = T) %>% 
+  filter(n>50) %>% 
+  select(brand) %>% 
+  unlist() %>% 
+  as.character()
+
+# display size
+main_display_size = d.copy %>% 
+  select(display_size) %>% 
+  count(display_size, sort = T) %>% 
+  filter(n>50) %>% 
+  select(display_size) %>% 
+  unlist() %>% 
+  as.character()
+
+# processor generation
+main_generation = d.copy %>% 
+  mutate(processor_gnrtn = ifelse(d.copy$processor_gnrtn == "Missing",NA, processor_gnrtn)) %>% 
+  fill(processor_gnrtn, .direction = c("updown")) %>% 
+  select(processor_gnrtn) %>% 
+  count(processor_gnrtn, sort = T) %>% 
+  filter(n>100) %>%
+  select(processor_gnrtn) %>%
+  unlist() %>% 
+  as.character()
+
+# processor name
+main_processor_name = d.copy %>% 
+  select(processor_name) %>% 
+  count(processor_name, sort = T) %>% 
+  filter(n>50) %>% 
+  select(processor_name) %>% 
+  unlist() %>% 
+  as.character()
+
+# ram_gb
+main_ram_gb = d.copy %>% 
+  select(ram_gb) %>% 
+  count(ram_gb, sort = T) %>% 
+  filter(n>50) %>% 
+  select(ram_gb) %>% 
+  unlist() %>% 
+  as.character()
+
+# ram_type
+main_ram_type = d.copy %>% 
+  select(ram_type) %>% 
+  count(ram_type, sort = T) %>% 
+  filter(n>50) %>% 
+  select(ram_type) %>% 
+  unlist() %>% 
+  as.character()
+
+# ssd
+main_ssd = d.copy %>% 
+  select(ssd) %>% 
+  count(ssd, sort = T) %>% 
+  filter(n>50) %>% 
+  select(ssd) %>% 
+  unlist() %>% 
+  as.character()
+
+# examine processor brand
+main_processor_brand = d.copy %>% 
+  select(processor_brand) %>% 
+  count(processor_brand, sort = T) %>% 
+  filter(n>50) %>% 
+  select(processor_brand) %>% 
+  unlist() %>% 
+  as.character()
+
+```
+
+```{r refine features with majority elements, include=FALSE}
+# feature engineering
+dd <- d.copy %>% 
+  mutate(brand = ifelse(!(d.copy$brand %in% main_brand), "others", brand),
+         display_size = ifelse(!(d.copy$display_size %in% main_display_size), "others", display_size),
+         processor_gnrtn = ifelse(!(d.copy$processor_gnrtn %in% main_generation), "others", processor_gnrtn),
+         processor_name = ifelse(!(d.copy$processor_name %in% main_processor_name), "others", processor_name),
+         ram_gb = ifelse(!(d.copy$ram_gb %in% main_ram_gb), "others", ram_gb),
+         ram_type = ifelse(!(d.copy$ram_type %in% main_ram_type), "others", ram_type),
+         ssd = ifelse(!(d.copy$ssd %in% main_ssd), "others", ssd),
+         processor_brand = ifelse(!(d.copy$processor_brand %in% main_processor_brand), "others", processor_brand),
+         hdd = ifelse(!(d.copy$hdd %in% c("0", "1024")), sample(c("0","1024"),1), hdd),
+         os = ifelse(!(d.copy$os %in% c("Mac", "Windows")), sample(c("Mac", "Windows"),1), os)) %>% 
+  mutate_if(is.character, as.factor) %>% 
+  select(-c(model))
+```
+
+**distribution of tidy data**
+
+Now it looks much better.
+```{r echo=FALSE, fig.height=8, fig.width=10, warning=FALSE}
+dd %>% 
+  select(-c(num %>% names())) %>% 
+  gather() %>% 
+  ggplot(aes(x = value)) +
+    geom_bar() +
+    facet_wrap(~key, scales = "free") +
+    theme_classic() +
+    theme(axis.text.x = element_text(angle = 90))
+```
+
+## Data Spliting
+```{r include=FALSE}
+dd_dum <- 
+  recipe(latest_price ~ ., data = dd) %>% 
+  step_dummy(all_nominal_predictors()) %>% 
+  prep() %>% 
+  bake(dd)
+```
+
+```{r echo=FALSE}
+set.seed(10)
+partition <- initial_split(dd_dum)
+train.df <- training(partition)
+test.df <- testing(partition)
+paste0("dimension of training set: (", dim(train.df)[[1]], ",", dim(train.df)[[2]],")")
+paste0("dimension of testing set: (", dim(test.df)[[1]], ",", dim(test.df)[[2]],")")
+```
+## Modeling
+
+**pca model in training set**
+
+```{r echo=FALSE, warning=FALSE}
+set.seed(100)
+lm0 <- train(
+  latest_price ~ .,
+  data = train.df,
+  method = "lm",
+  preProcess = c("center","scale","pca")
+)
+lm0
+```
+
+## Model Performance
+
+**pca model evaluation performance in testing set**
+
+```{r include=FALSE}
+target <- test.df %>% select(latest_price) %>% unlist() %>% as.integer()
+test.df <- test.df %>% select(-latest_price)
+pred_result <- predict(lm0, test.df)
+```
+
+```{r echo=FALSE}
+# RMSE
+paste0("RMSE:",round(sqrt(mean((target - pred_result)^2)),2))
+paste0("R-squared:",round(cor(target, pred_result) ^ 2, 7))
+```
+
+## Conclusion
+
+PCA modeling is pretty useful while dealing with lots of features. At first, I only have 22 features which is less than half amount of the total number of features in the model. The reason why the feature increase is because dummy variables are created for all categorical variables, in which I think it is easier to build the model. PCA helps to reduce the dimension of data. I've examine before, even I have 48 features, only 37 component will achieve 95% of variance.
+
+I also check the marginal model plot, the majority looks fine, only 2 or 3 components do not fit the model from two ends. As a result, PCA linear model may not be enough for this data set, other PCA modelings are worth to try.
