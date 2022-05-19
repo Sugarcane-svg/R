@@ -1,0 +1,164 @@
+---
+title: "Blog4: Date Classification"
+author: "Jie Zou"
+date: "`r Sys.Date()`"
+output:
+  prettydoc::html_pretty:
+    theme: architect
+    highlight: github
+---
+
+```{r include=FALSE, warning=FALSE, message=FALSE}
+library(dplyr)
+library(caret)
+library(corrplot)
+#library(purrr)
+library(tidyr)
+#library(forcats)
+library(rsample)
+library(e1071)
+library(rpart)
+```
+
+## Data Structure
+
+* data dimension: (898, 35)
+* no missing value
+* only target variable is character type, the rest are numeric/integer type
+
+```{r echo=FALSE}
+d <- read.csv("Date_Fruit_Datasets.csv")
+str(d)
+```
+```{r echo=FALSE}
+# check missing value
+d %>% is.na() %>% sum()
+```
+
+## EDA
+### Numeric variables
+
+**Multi-Collinearity with full features**
+
+*Hightly Positive* correlated pairs:
+
+* AREA: PERIMETER/MAJOR_AXIS/MINOR_AXIS/EQDIASQ/CONVEX_AREA
+* SOLIDITY: SHAPEFACTOR_4
+* ASPECT_RATIO: SHAPEFACTOR_1
+* ROUNDNESS: COMPACTNESS
+* COMPACTNESS: SHAPEFACTOR_3
+* MeanRR: MeanRG/MeanRB/ALLdaub4RR/ALLdaub4RB/ALLdaub4RG
+* StdDevRR: StdDevRG
+* SkewRR: SkewRG/KurtosisRR
+* SkewRG: KurtosisRG
+* SkewRB: KurtosisRB
+* EntropyRR: EntropyRG/EntropyRB
+
+*Hightly Negative* correlated pairs:
+
+* COMPACTNESS: ECCENTRICITY
+* SHAPEFACTOR_2: AREA/PERIMETER/MAJOR_AXIS/EQDIASQ/CONVEX_AREA
+* SHAPEFACTOR_3: ECCENTRICITY
+* SkewRR: MeanRR/MeanRG/MeanRB65
+* KurtosisRG: MeanRR
+* ALLdaub4RR: SkewRR/SkewRG/KurtosisRG
+```{r echo=FALSE, fig.height=10, fig.width=10}
+# original corr plot
+d %>% 
+  select(-Class) %>% 
+  cor() %>% 
+  corrplot(diag = F, type = "lower", tl.srt = 0.1, method = "number")
+```
+**Multi-Collinearity with reduced features**
+```{r echo=FALSE, fig.height=9, fig.width=9}
+# multi-colinearity reduce corr plot
+d %>% 
+  select(-c(Class, PERIMETER, MAJOR_AXIS, MINOR_AXIS, EQDIASQ, CONVEX_AREA, MeanRG, MeanRB, ALLdaub4RR, ALLdaub4RB, ALLdaub4RG,ROUNDNESS,SHAPEFACTOR_3, ECCENTRICITY,SkewRG, KurtosisRR, EntropyRG, EntropyRB, MeanRR, SHAPEFACTOR_1, SHAPEFACTOR_2, SHAPEFACTOR_4, StdDevRR, SkewRB)) %>% 
+  cor() %>% 
+  corrplot(diag = F, type = "lower", tl.srt = 0.1, method = "number")
+```
+```{r include=FALSE}
+# reduced dataframe
+dd <- d %>% 
+  select(-c(PERIMETER, MAJOR_AXIS, MINOR_AXIS, EQDIASQ, CONVEX_AREA, MeanRG, MeanRB, ALLdaub4RR, ALLdaub4RB, ALLdaub4RG,ROUNDNESS,SHAPEFACTOR_3, ECCENTRICITY,SkewRG, KurtosisRR, EntropyRG, EntropyRB, MeanRR, SHAPEFACTOR_1, SHAPEFACTOR_2, SHAPEFACTOR_4, StdDevRR, SkewRB)) 
+```
+
+**Distribution**
+
+```{r echo=FALSE, fig.height=9, fig.width=9}
+dd %>% 
+  gather("var", "val", -Class) %>% 
+  ggplot(aes(x = val, color = Class)) + 
+    geom_density() +
+    facet_wrap(~ var, scales = "free") + 
+    theme_classic()
+```
+
+
+### Categorical Variables
+```{r echo=FALSE}
+d %>% 
+  select(Class) %>%
+  ggplot(aes(x = Class)) +
+    geom_bar() + 
+    theme_classic()
+```
+
+## Create Partition
+```{r echo=FALSE}
+create_partition = initial_split(dd, strata = "Class")
+
+train.df = training(create_partition)
+test.df = testing(create_partition)
+
+train.label <- train.df %>% select(Class)
+test.label <- test.df %>% select(Class) %>% unlist() %>% as.character() %>% as.factor()
+
+test.df <- test.df %>% select(-c(Class))
+print(dim(train.df))
+print(dim(test.df))
+```
+
+
+## Modeling
+
+### Decision Tree: 75%
+```{r echo=FALSE, warning=FALSE}
+set.seed(1)
+decision <- rpart::rpart(Class ~ ., data = train.df, method = "class")
+rpart.plot::rpart.plot(decision)
+```
+```{r echo=FALSE}
+
+# prediction
+decision_pred <- predict(decision, test.df, "class")
+confusionMatrix(decision_pred, test.label)
+```
+
+### SVM: 83%
+```{r include=FALSE}
+svm0 = e1071::svm(as.factor(Class) ~ ., data=train.df, type = "C-classification", kernel = "sigmoid")
+```
+```{r include=FALSE}
+svm_pred = predict(svm0, test.df)
+```
+```{r echo=FALSE}
+confusionMatrix(svm_pred, test.label)
+```
+
+### Naive Bayes: 85%
+```{r include=FALSE}
+bayes = naivebayes::naive_bayes(as.factor(Class) ~ ., data = train.df)
+```
+```{r include=FALSE}
+naive_pred = predict(bayes, test.df, "class")
+```
+```{r echo=FALSE}
+confusionMatrix(naive_pred, test.label)
+```
+
+
+## Conclusion
+
+Among the three classifiers, based on the accuracy score, Naive Bayes has the best output. Besides the mentioned three classification method, there is some other methods that worth to try such as cnn supported by keras/tensorflow, gradient boost and xgboost
+
