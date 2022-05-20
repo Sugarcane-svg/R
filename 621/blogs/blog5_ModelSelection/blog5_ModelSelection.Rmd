@@ -1,0 +1,172 @@
+---
+title: "Blog5: Model Selection"
+author: "Jie Zou"
+date: "`r Sys.Date()`"
+output:
+  prettydoc::html_pretty:
+    theme: architect
+    highlight: github
+---
+
+```{r include=FALSE}
+library(dplyr)
+library(ggplot2)
+library(purrr)
+library(stringr)
+library(tidyr)
+library(corrplot)
+```
+
+## Data Structure After Feature Engineering
+
+```{r include=FALSE}
+d <- read.csv("Car_details_v3.csv") %>% filter(!is.na(seats))
+```
+
+
+```{r echo=FALSE}
+own <- d %>% 
+  select(owner) %>% 
+  map(~str_remove(.," Owner")) %>% 
+  as.data.frame()
+
+brand <- d %>% 
+  select(name) %>% 
+  map(~str_remove(., " (\\D.*|\\d.*)")) %>% 
+  as.data.frame()
+
+mile <- d %>% 
+  select(mileage) %>% 
+  map(~str_replace(.," kmpl|km/kg", "")) %>% 
+  as.data.frame()
+power <- d %>% 
+  select(max_power) %>%
+  map(~str_remove(.," bhp")) %>%
+  as.data.frame()
+
+torque <- d %>% 
+  select(torque) %>% 
+  map(~str_remove(.,"(\\D.*|@|at).*")) %>% 
+  as.data.frame() %>% 
+  mutate(torque = ifelse(torque == "", "150", torque)) %>% 
+  mutate_if(is.character, as.double) %>% 
+  mutate(torque_nm = ifelse(torque<50, torque*9.8, torque)) %>%
+  select(torque_nm)
+
+engine <- d %>% 
+  select(engine) %>% 
+  map(~str_remove(.,"\\D.+")) %>% 
+  as.data.frame()
+
+d.copy <- d %>%
+  select(-c(mileage, max_power, torque, engine, name, owner)) %>% 
+  cbind(brand = brand$name,
+        mileage_kmpl = as.double(mile$mileage),
+        max_power_bhp = as.double(power$max_power),
+        torque_nm = as.double(torque$torque_nm),
+        engine_cc = as.integer(engine$engine),
+        own = own$owner)
+
+brand <- NULL
+engine <- NULL
+power <- NULL
+mile <- NULL
+torque <- NULL
+own <- NULL
+
+glimpse(d.copy)
+```
+
+## Numeric Correlations and Distributions
+
+```{r echo=FALSE, fig.height=8, fig.width=10}
+d.copy %>%
+  discard(is.character) %>%
+  cor(use="pairwise.complete.obs") %>% 
+  corrplot(method = "number", type = "lower", diag = F, tl.srt = 0.1)
+```
+
+
+From distributions, we see that 
+
+- *km_driven*, *max_power_bhp* and target are right skewed which needs to transform during modeling
+- *engine_cc* has many so many peaks
+- *torque_nm* looks like bi-model but it is weirder
+- *mileage_kmpl* is roughly normal. 
+- *seats*: Five seats and seven seats are two most common seat capability. 
+- *year*: Buyers are more interested in cars after year 2000
+
+```{r echo=FALSE, fig.height=8, fig.width=10, warning=FALSE}
+d.copy %>% 
+  discard(is.character) %>% 
+  gather("var", "val") %>% 
+  ggplot(aes(x = val)) +
+    geom_density() + 
+    theme_classic() +
+    facet_wrap(~var, scales = "free")
+```
+
+## Categorical Distributions
+
+```{r echo=FALSE, fig.height=8, fig.width=10}
+d.copy %>% 
+  keep(is.character) %>% 
+  gather("var", "val") %>% 
+  ggplot(aes(x = val)) + 
+    geom_bar()+
+    facet_wrap(~var, scales="free") + 
+    theme_classic() +
+    theme(axis.text.x = element_text(angle = 90))
+```
+
+## Modeling
+
+**Full Model**
+
+```{r}
+lm0 <- lm(selling_price ~ . , data = d.copy)
+```
+```{r echo=FALSE}
+paste0("Adjusted R-squared: ",round(summary(lm0)$adj.r.squared, 3))
+```
+
+**Feature Transformed Full Model**
+```{r}
+lm0.ft <- lm(selling_price ~ year + log(km_driven) + fuel + seller_type + transmission + brand + mileage_kmpl + log(max_power_bhp) + torque_nm + engine_cc + own, data = d.copy)
+```
+```{r echo=FALSE}
+paste0("Adjusted R-squared: ",round(summary(lm0.ft)$adj.r.squared, 3))
+```
+
+
+**Target Transformed Full Model**
+
+```{r}
+lm0.tt <- lm(log(selling_price)~., data= d.copy)
+```
+```{r echo=FALSE}
+paste0("Adjusted R-squared: ",round(summary(lm0.tt)$adj.r.squared, 3))
+```
+
+
+**Both Feature and Target Transformed Full Model**
+
+```{r}
+lm0.ftt <- lm0.ft %>% 
+  update(log(selling_price)~., data = d.copy)
+```
+```{r echo=FALSE}
+paste0("Adjusted R-squared: ",round(summary(lm0.ftt)$adj.r.squared, 3))
+```
+
+
+
+**Backward Elimination Using Best Adj.R.Sqrd**
+```{r echo=FALSE}
+lm1 <- step(lm0.ftt, direction = "backward")
+summary(lm1)
+```
+
+## Conclusion
+
+We have 5 different models here: Full model, feature transformed model, target transformed model, both feature and target transformed mode and reduced model. Based on the goodness of fit, both feature and target transformed model has the highest adjusted R squared value. However, the value between reduced model and "best" model does not make a lot difference. If I have choose one model out of the rest, I will take the reduced the model whose AIC is the lowest and adjust R squared is close to the highest one(help reduce the chance to overfit the data)
