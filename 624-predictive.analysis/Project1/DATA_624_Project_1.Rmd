@@ -1,0 +1,1751 @@
+---
+title: "Data_624_Project_1"
+author: 'Group 4: Melvin Matanos, Claire Meyer, Chinedu Onyeka, Euclid Zhang, Jie
+  Zou'
+date: "6/11/2022"
+output:
+  word_document:
+    reference_docx: Style.docx
+  html_document:
+    df_print: paged
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE, include=FALSE)
+```
+
+```{r}
+### The following codes are run before the report section.
+### This section is not echoed when it is knitted to the word document, but the outputs can be viewed in RStudio.
+### We will utilize the results from this section to create the report
+```
+
+```{r message=FALSE, warning=FALSE}
+# Loading packages
+library(fpp2)
+library(dplyr)
+library(tidyverse)
+library(corrplot)
+library(MASS)
+library(imputeTS)
+library(patchwork)
+library(ggplot2)
+```
+
+
+```{r}
+# Loading the data set
+raw_df <- readxl::read_excel("Data Set for Class.xls")
+raw_df <- as.data.frame(raw_df)
+raw_df$group <- as.factor(raw_df$group)
+```
+
+
+```{r}
+# Summary of the first 1622 periods. The remaining 140 periods are blank and need to be forecasted
+raw_summary <- summary(raw_df[c(1:(1622*6)),])
+raw_summary
+# From the summary, we see there are some missing values that need to be imputed
+```
+
+```{r}
+# Missing values in the observations
+raw_na <- raw_df[c(1:(1622*6)),][apply(is.na(raw_df[c(1:(1622*6)),]),1,any),]
+raw_na
+```
+
+```{r fig.height=3, fig.width=3, message=FALSE, warning=FALSE}
+# Checking the correlations between variables. If the correlations are high, we can use linear models to impute the missing values of one variable using another variable.
+corrplot(cor(raw_df[,c(3:7)], use = "na.or.complete"), 
+         method = 'number', order = "hclust",
+         type = 'lower', diag = FALSE, tl.srt = 0.1)
+
+# From the following plot, Var03, Var05, and Var07 are highly correlated to Var01. We can impute the missing values of Var03, Var05, and Var07 where Var01 is available. For records with all Var01, Var03, Var05, and Var07 missing. We will use other methods of imputation
+```
+
+
+```{r}
+# Impute the missing values of Var03, Var05, Var07, where Var01 is available, using linear models
+
+var03_lm <- lm(Var03~Var01,raw_df)
+var05_lm <- lm(Var05~Var01,raw_df)
+var07_lm <- lm(Var07~Var01,raw_df)
+
+raw_df$Var03[!is.na(raw_df$Var01) & is.na(raw_df$Var03)] <-
+  predict(var03_lm,raw_df[!is.na(raw_df$Var01) & is.na(raw_df$Var03),])
+raw_df$Var05[!is.na(raw_df$Var01) & is.na(raw_df$Var05)] <-
+  predict(var03_lm,raw_df[!is.na(raw_df$Var01) & is.na(raw_df$Var05),])
+raw_df$Var07[!is.na(raw_df$Var01) & is.na(raw_df$Var07)] <-
+  predict(var03_lm,raw_df[!is.na(raw_df$Var01) & is.na(raw_df$Var07),])
+```
+
+
+```{r}
+S01_Var01 <- raw_df %>% filter(group=="S01") %>% dplyr::select("SeriesInd","Var01")
+S01_Var02 <- raw_df %>% filter(group=="S01") %>% dplyr::select("SeriesInd","Var02") 
+S02_Var02 <- raw_df %>% filter(group=="S02") %>% dplyr::select("SeriesInd","Var02")
+S02_Var03 <- raw_df %>% filter(group=="S02") %>% dplyr::select("SeriesInd","Var03")
+S03_Var05 <- raw_df %>% filter(group=="S03") %>% dplyr::select("SeriesInd","Var05")
+S03_Var07 <- raw_df %>% filter(group=="S03") %>% dplyr::select("SeriesInd","Var07")
+S04_Var01 <- raw_df %>% filter(group=="S04") %>% dplyr::select("SeriesInd","Var01")
+S04_Var02 <- raw_df %>% filter(group=="S04") %>% dplyr::select("SeriesInd","Var02")
+S05_Var02 <- raw_df %>% filter(group=="S05") %>% dplyr::select("SeriesInd","Var02")
+S05_Var03 <- raw_df %>% filter(group=="S05") %>% dplyr::select("SeriesInd","Var03")
+S06_Var05 <- raw_df %>% filter(group=="S06") %>% dplyr::select("SeriesInd","Var05")
+S06_Var07 <- raw_df %>% filter(group=="S06") %>% dplyr::select("SeriesInd","Var07")
+
+main_df <- data.frame(S01_Var01=S01_Var01[,2],
+                      S01_Var02=S01_Var02[,2],
+                      S02_Var02=S02_Var02[,2],
+                      S02_Var03=S02_Var03[,2],
+                      S03_Var05=S03_Var05[,2],
+                      S03_Var07=S03_Var07[,2],
+                      S04_Var01=S04_Var01[,2],
+                      S04_Var02=S04_Var02[,2],
+                      S05_Var02=S05_Var02[,2],
+                      S05_Var03=S05_Var03[,2],
+                      S06_Var05=S06_Var05[,2],
+                      S06_Var07=S06_Var07[,2])
+row.names(main_df) <- S01_Var01$SeriesInd
+
+main_df
+```
+
+
+```{r fig.height=6, fig.width=8}
+# Checking outliers and skewness
+
+main_df_pre_process <- main_df
+
+par(mfrow=c(3,4))
+for (i in c(1:length(main_df_pre_process))) {
+  boxplot(main_df_pre_process[,i], main=colnames(main_df_pre_process)[i])
+}
+
+# Var02 of all groups are highly right skewed that may need to be transformed to stablize the variance.
+# S02_Var03, S06_Var05, and S06_Var07 have an extreme outlier. 
+# If the extreme outliers are excluded, all Variables except Var02 have stable variance and no transformation is needed.
+# We will remove the extreme outliers and impute them with reasonable values along with other missing values.
+```
+
+
+```{r}
+# remove the extreme outliers to be imputed later
+main_df$S02_Var03[which.max(main_df$S02_Var03)] <- NA
+main_df$S06_Var05[which.max(main_df$S06_Var05)] <- NA
+main_df$S06_Var07[which.max(main_df$S06_Var07)] <- NA
+```
+
+
+
+
+
+```{r fig.height=2.5, fig.width=3}
+# Finding lambda for Box-Cox Transformation for Var02
+boxcox(lm(raw_df$Var02 ~ 1))
+# A number near 0 suggested a log transformation should be used
+```
+
+```{r fig.height=2, fig.width=8}
+# Boxplot of Var02 after log transformation
+
+par(mfrow=c(1,4))
+boxplot(log(main_df_pre_process$S01_Var02), main="S01_Var02_Log")
+boxplot(log(main_df_pre_process$S02_Var02), main="S02_Var02_Log")
+boxplot(log(main_df_pre_process$S04_Var02), main="S04_Var02_Log")
+boxplot(log(main_df_pre_process$S05_Var02), main="S05_Var02_Log")
+```
+
+
+
+
+
+```{r}
+# For remaining missing value, we will perform linear interpolation.
+# The following are examples of missing values before linear interpolation.
+
+main_df_pre_interpolation <-  main_df[c(1535:1540),]
+main_df_pre_interpolation
+```
+
+
+```{r}
+# perform linear interpolation
+for (i in c(1:ncol(main_df))) {
+  main_df[c(1:1622),i] <- na_interpolation(main_df[c(1:1622),i])
+}
+
+# The following are the values after imputation by linear interpolation.
+main_df_post_interpolation <- main_df[c(1535:1540),]
+main_df_post_interpolation
+```
+
+
+
+
+
+```{r}
+# Data is ready for modeling
+# Create time series objects
+S01_Var01_ts <- ts(main_df$S01_Var01[1:1622],start=as.integer(raw_df$SeriesInd[1]), frequency = 1)
+S01_Var02_ts <- ts(main_df$S01_Var02[1:1622],start=as.integer(raw_df$SeriesInd[1]), frequency = 1)
+S02_Var02_ts <- ts(main_df$S02_Var02[1:1622],start=as.integer(raw_df$SeriesInd[1]), frequency = 1)
+S02_Var03_ts <- ts(main_df$S02_Var03[1:1622],start=as.integer(raw_df$SeriesInd[1]), frequency = 1)
+S03_Var05_ts <- ts(main_df$S03_Var05[1:1622],start=as.integer(raw_df$SeriesInd[1]), frequency = 1)
+S03_Var07_ts <- ts(main_df$S03_Var07[1:1622],start=as.integer(raw_df$SeriesInd[1]), frequency = 1)
+S04_Var01_ts <- ts(main_df$S04_Var01[1:1622],start=as.integer(raw_df$SeriesInd[1]), frequency = 1)
+S04_Var02_ts <- ts(main_df$S04_Var02[1:1622],start=as.integer(raw_df$SeriesInd[1]), frequency = 1)
+S05_Var02_ts <- ts(main_df$S05_Var02[1:1622],start=as.integer(raw_df$SeriesInd[1]), frequency = 1)
+S05_Var03_ts <- ts(main_df$S05_Var03[1:1622],start=as.integer(raw_df$SeriesInd[1]), frequency = 1)
+S06_Var05_ts <- ts(main_df$S06_Var05[1:1622],start=as.integer(raw_df$SeriesInd[1]), frequency = 1)
+S06_Var07_ts <- ts(main_df$S06_Var07[1:1622],start=as.integer(raw_df$SeriesInd[1]), frequency = 1)
+```
+
+```{r fig.height=20, fig.width=10}
+# Time Plot
+autoplot(S01_Var01_ts) +
+autoplot(S01_Var02_ts) +
+autoplot(S02_Var02_ts) +
+autoplot(S02_Var03_ts) +
+autoplot(S03_Var05_ts) +
+autoplot(S03_Var07_ts) +
+autoplot(S04_Var01_ts) +
+autoplot(S04_Var02_ts) +
+autoplot(S05_Var02_ts) +
+autoplot(S05_Var03_ts) +
+autoplot(S06_Var05_ts) +
+autoplot(S06_Var07_ts) +
+  plot_layout(ncol = 1, guides = "collect")
+
+# There is no apparent seasonal behaviours in all time series.
+# There are apparent trends in Var01,Var05, and Var07. There is no apparent trend in Var02. Var03 seems to have cyclic behaviours.
+```
+
+
+```{r fig.height=20, fig.width=10}
+# ACF and PACF
+ggAcf(S01_Var01_ts) + ggPacf(S01_Var01_ts) +
+ggAcf(S01_Var02_ts) + ggPacf(S01_Var02_ts) +
+ggAcf(S02_Var02_ts) + ggPacf(S02_Var02_ts) +
+ggAcf(S02_Var03_ts) + ggPacf(S02_Var03_ts) +
+ggAcf(S03_Var05_ts) + ggPacf(S03_Var05_ts) +
+ggAcf(S03_Var07_ts) + ggPacf(S03_Var07_ts) +
+ggAcf(S04_Var01_ts) + ggPacf(S04_Var01_ts) +
+ggAcf(S04_Var02_ts) + ggPacf(S04_Var02_ts) +
+ggAcf(S05_Var02_ts) + ggPacf(S05_Var02_ts) +
+ggAcf(S05_Var03_ts) + ggPacf(S05_Var03_ts) +
+ggAcf(S06_Var05_ts) + ggPacf(S06_Var05_ts) +
+ggAcf(S06_Var07_ts) + ggPacf(S06_Var07_ts) +
+  plot_layout(ncol = 2, guides = "collect")
+
+# All time series have significant autocorrelations for multiple lags in the ACF plots.
+# The autocorrelations in the PACF plots are not so strong.
+# We confirm that the time series are non-stationary.
+```
+
+```{r}
+# Buildling models
+# For each time series, we build an optimal ETS model an an optimal ARIMA model based on the AIC scores.
+
+S01_Var01_ets <- ets(S01_Var01_ts)
+S01_Var01_arima <- auto.arima(S01_Var01_ts, stepwise=FALSE, approximation=FALSE)
+
+S01_Var02_ets <- ets(S01_Var02_ts, lambda = 0)
+S01_Var02_arima <- auto.arima(S01_Var02_ts, lambda = 0, stepwise=FALSE, approximation=FALSE)
+
+S02_Var02_ets <- ets(S02_Var02_ts, lambda = 0)
+S02_Var02_arima <- auto.arima(S02_Var02_ts, lambda = 0, stepwise=FALSE, approximation=FALSE)
+
+S02_Var03_ets <- ets(S02_Var03_ts)
+S02_Var03_arima <- auto.arima(S02_Var03_ts, stepwise=FALSE, approximation=FALSE)
+
+S03_Var05_ets <- ets(S03_Var05_ts)
+S03_Var05_arima <- auto.arima(S03_Var05_ts, stepwise=FALSE, approximation=FALSE)
+
+S03_Var07_ets <- ets(S03_Var07_ts)
+S03_Var07_arima <- auto.arima(S03_Var07_ts, stepwise=FALSE, approximation=FALSE)
+
+S04_Var01_ets <- ets(S04_Var01_ts)
+S04_Var01_arima <- auto.arima(S04_Var01_ts, stepwise=FALSE, approximation=FALSE)
+
+S04_Var02_ets <- ets(S04_Var02_ts, lambda = 0)
+S04_Var02_arima <- auto.arima(S04_Var02_ts, lambda = 0, stepwise=FALSE, approximation=FALSE)
+
+S05_Var02_ets <- ets(S05_Var02_ts, lambda = 0)
+S05_Var02_arima <- auto.arima(S05_Var02_ts, lambda = 0, stepwise=FALSE, approximation=FALSE)
+
+S05_Var03_ets <- ets(S05_Var03_ts)
+S05_Var03_arima <- auto.arima(S05_Var03_ts, stepwise=FALSE, approximation=FALSE)
+
+S06_Var05_ets <- ets(S06_Var05_ts)
+S06_Var05_arima <- auto.arima(S06_Var05_ts, stepwise=FALSE, approximation=FALSE)
+
+S06_Var07_ets <- ets(S06_Var07_ts)
+S06_Var07_arima <- auto.arima(S06_Var07_ts, stepwise=FALSE, approximation=FALSE)
+```
+
+
+
+```{r}
+# Perform Cross-Validation for both Exponential Smoothing (ETS) and ARIMA models
+# The process takes more than an hour so the pre-calculated results at the end of the block can be used to save time
+
+# fets <- function(x, h) {
+#   forecast(ets(x), h = h)
+# }
+# 
+# farima <- function(x, h) {
+#   forecast(auto.arima(x), h=h)
+# }
+# 
+# fets2 <- function(x, h) {
+#   forecast(ets(x, lambda=0), h = h)
+# }
+# 
+# farima2 <- function(x, h) {
+#   forecast(auto.arima(x, lambda=0), h=h)
+# }
+# 
+# #Function to calculate the MAPE using the result from the tsCV() function
+# mape <- function(cv_e, ts) {
+#   return(
+#     mean(abs(cv_e[1:(length(cv_e)-sum(is.na(cv_e)))]/
+#                ts[-sum(is.na(cv_e))]))*100 #multiply 100 to represent the number in percentage, which is consistent with the output from a time series model
+#   )
+# }
+# 
+# e1 <- tsCV(S01_Var01_ts, fets, h=1)
+# e2 <- tsCV(S01_Var01_ts, farima, h=1)
+# S01_Var01_ets_cv <- mape(e1, S01_Var01_ts)
+# S01_Var01_arima_cv <- mape(e2, S01_Var01_ts)
+# 
+# e1 <- tsCV(S01_Var02_ts, fets2, h=1)
+# e2 <- tsCV(S01_Var02_ts, farima2, h=1)
+# S01_Var02_ets_cv <- mape(e1, S01_Var02_ts)
+# S01_Var02_arima_cv <- mape(e2, S01_Var02_ts)
+# 
+# e1 <- tsCV(S02_Var02_ts, fets2, h=1)
+# e2 <- tsCV(S02_Var02_ts, farima2, h=1)
+# S02_Var02_ets_cv <- mape(e1, S02_Var02_ts)
+# S02_Var02_arima_cv <- mape(e2, S02_Var02_ts)
+# 
+# e1 <- tsCV(S02_Var03_ts, fets, h=1)
+# e2 <- tsCV(S02_Var03_ts, farima, h=1)
+# S02_Var03_ets_cv <- mape(e1, S02_Var03_ts)
+# S02_Var03_arima_cv <- mape(e2, S02_Var03_ts)
+# 
+# e1 <- tsCV(S03_Var05_ts, fets, h=1)
+# e2 <- tsCV(S03_Var05_ts, farima, h=1)
+# S03_Var05_ets_cv <- mape(e1, S03_Var05_ts)
+# S03_Var05_arima_cv <- mape(e2, S03_Var05_ts)
+# 
+# e1 <- tsCV(S03_Var07_ts, fets, h=1)
+# e2 <- tsCV(S03_Var07_ts, farima, h=1)
+# S03_Var07_ets_cv <- mape(e1, S03_Var07_ts)
+# S03_Var07_arima_cv <- mape(e2, S03_Var07_ts)
+# 
+# e1 <- tsCV(S04_Var01_ts, fets, h=1)
+# e2 <- tsCV(S04_Var01_ts, farima, h=1)
+# S04_Var01_ets_cv <- mape(e1, S04_Var01_ts)
+# S04_Var01_arima_cv <- mape(e2, S04_Var01_ts)
+# 
+# e1 <- tsCV(S04_Var02_ts, fets2, h=1)
+# e2 <- tsCV(S04_Var02_ts, farima2, h=1)
+# S04_Var02_ets_cv <- mape(e1, S04_Var02_ts)
+# S04_Var02_arima_cv <- mape(e2, S04_Var02_ts)
+# 
+# e1 <- tsCV(S05_Var02_ts, fets2, h=1)
+# e2 <- tsCV(S05_Var02_ts, farima2, h=1)
+# S05_Var02_ets_cv <- mape(e1, S05_Var02_ts)
+# S05_Var02_arima_cv <- mape(e2, S05_Var02_ts)
+# 
+# e1 <- tsCV(S05_Var03_ts, fets, h=1)
+# e2 <- tsCV(S05_Var03_ts, farima, h=1)
+# S05_Var03_ets_cv <- mape(e1, S05_Var03_ts)
+# S05_Var03_arima_cv <- mape(e2, S05_Var03_ts)
+# 
+# e1 <- tsCV(S06_Var05_ts, fets, h=1)
+# e2 <- tsCV(S06_Var05_ts, farima, h=1)
+# S06_Var05_ets_cv <- mape(e1, S06_Var05_ts)
+# S06_Var05_arima_cv <- mape(e2, S06_Var05_ts)
+# 
+# e1 <- tsCV(S06_Var07_ts, fets, h=1)
+# e2 <- tsCV(S06_Var07_ts, farima, h=1)
+# S06_Var07_ets_cv <- mape(e1, S06_Var07_ts)
+# S06_Var07_arima_cv <- mape(e2, S06_Var07_ts)
+
+# The followings are the pre-calculated results
+
+S01_Var01_ets_cv <- 0.9177038
+S01_Var01_arima_cv <- 0.9208322
+S01_Var02_ets_cv <- 25.73889
+S01_Var02_arima_cv <- 24.89347
+S02_Var02_ets_cv <- 26.99113
+S02_Var02_arima_cv <- 25.61222
+S02_Var03_ets_cv <- 1.371266
+S02_Var03_arima_cv <- 1.389502
+S03_Var05_ets_cv <- 1.331599
+S03_Var05_arima_cv <- 1.337125
+S03_Var07_ets_cv <- 1.231979
+S03_Var07_arima_cv <- 1.236644
+S04_Var01_ets_cv <- 1.22556
+S04_Var01_arima_cv <- 1.277181
+S04_Var02_ets_cv <- 30.88217
+S04_Var02_arima_cv <- 29.31935
+S05_Var02_ets_cv <- 19.29705
+S05_Var02_arima_cv <- 18.863
+S05_Var03_ets_cv <- 0.814632
+S05_Var03_arima_cv <- 0.8129907
+S06_Var05_ets_cv <- 1.132529
+S06_Var05_arima_cv <- 1.141299
+S06_Var07_ets_cv <- 1.147087
+S06_Var07_arima_cv <- 1.152259
+```
+
+
+
+```{r}
+# Gather the performance results in one dataframe for comparison
+# The table includes the MAPE from the training data and the MAPE from the Cross-Validations
+
+model_compare <- 
+  data.frame(Group=c("S01","S01","S01","S01",
+                     "S02","S02","S02","S02",
+                     "S03","S03","S03","S03",
+                     "S04","S04","S04","S04",
+                     "S05","S05","S05","S05",
+                     "S06","S06","S06","S06"),
+             Variable=c("Var01","Var01","Var02","Var02",
+                        "Var02","Var02","Var03","Var03",
+                        "Var05","Var05","Var07","Var07",
+                        "Var01","Var01","Var02","Var02",
+                        "Var02","Var02","Var03","Var03",
+                        "Var05","Var05","Var07","Var07"),
+             Model_Type=c("Exponential Smoothing","ARIMA","Exponential Smoothing","ARIMA",
+                          "Exponential Smoothing","ARIMA","Exponential Smoothing","ARIMA",
+                          "Exponential Smoothing","ARIMA","Exponential Smoothing","ARIMA",
+                          "Exponential Smoothing","ARIMA","Exponential Smoothing","ARIMA",
+                          "Exponential Smoothing","ARIMA","Exponential Smoothing","ARIMA",
+                          "Exponential Smoothing","ARIMA","Exponential Smoothing","ARIMA"),
+             Model=c(as.character(S01_Var01_ets),as.character(S01_Var01_arima),
+                     as.character(S01_Var02_ets),as.character(S01_Var02_arima),
+                     as.character(S02_Var02_ets),as.character(S02_Var02_arima),
+                     as.character(S02_Var03_ets),as.character(S02_Var03_arima),
+                     as.character(S03_Var05_ets),as.character(S03_Var05_arima),
+                     as.character(S03_Var07_ets),as.character(S03_Var07_arima),
+                     as.character(S04_Var01_ets),as.character(S04_Var01_arima),
+                     as.character(S04_Var02_ets),as.character(S04_Var02_arima),
+                     as.character(S05_Var02_ets),as.character(S05_Var02_arima),
+                     as.character(S05_Var03_ets),as.character(S05_Var03_arima),
+                     as.character(S06_Var05_ets),as.character(S06_Var05_arima),
+                     as.character(S06_Var07_ets),as.character(S06_Var07_arima)),
+             CV_MAPE=c(S01_Var01_ets_cv, S01_Var01_arima_cv,
+                       S01_Var02_ets_cv, S01_Var02_arima_cv,
+                       S02_Var02_ets_cv, S02_Var02_arima_cv,
+                       S02_Var03_ets_cv, S02_Var03_arima_cv,
+                       S03_Var05_ets_cv, S03_Var05_arima_cv,
+                       S03_Var07_ets_cv, S03_Var07_arima_cv,
+                       S04_Var01_ets_cv, S04_Var01_arima_cv,
+                       S04_Var02_ets_cv, S04_Var02_arima_cv,
+                       S05_Var02_ets_cv, S05_Var02_arima_cv,
+                       S05_Var03_ets_cv, S05_Var03_arima_cv,
+                       S06_Var05_ets_cv, S06_Var05_arima_cv,
+                       S06_Var07_ets_cv, S06_Var07_arima_cv),
+             Train_MAPE=c(accuracy(S01_Var01_ets)[5],accuracy(S01_Var01_arima)[5],
+                          accuracy(S01_Var02_ets)[5],accuracy(S01_Var02_arima)[5],
+                          accuracy(S02_Var02_ets)[5],accuracy(S02_Var02_arima)[5],
+                          accuracy(S02_Var03_ets)[5],accuracy(S02_Var03_arima)[5],
+                          accuracy(S03_Var05_ets)[5],accuracy(S03_Var05_arima)[5],
+                          accuracy(S03_Var07_ets)[5],accuracy(S03_Var07_arima)[5],
+                          accuracy(S04_Var01_ets)[5],accuracy(S04_Var01_arima)[5],
+                          accuracy(S04_Var02_ets)[5],accuracy(S04_Var02_arima)[5],
+                          accuracy(S05_Var02_ets)[5],accuracy(S05_Var02_arima)[5],
+                          accuracy(S05_Var03_ets)[5],accuracy(S05_Var03_arima)[5],
+                          accuracy(S06_Var05_ets)[5],accuracy(S06_Var05_arima)[5],
+                          accuracy(S06_Var07_ets)[5],accuracy(S06_Var07_arima)[5]))
+
+```
+
+
+
+```{r}
+# Adding the p=value from the ljung-box test to compare the goodness of fit for each model
+
+model_compare$Ljung_Box_p[1] <- checkresiduals(S01_Var01_ets, plot=FALSE)$p.value
+model_compare$Ljung_Box_p[2] <- checkresiduals(S01_Var01_arima, plot=FALSE)$p.value
+model_compare$Ljung_Box_p[3] <- checkresiduals(S01_Var02_ets, plot=FALSE)$p.value
+model_compare$Ljung_Box_p[4] <- checkresiduals(S01_Var02_arima, plot=FALSE)$p.value
+model_compare$Ljung_Box_p[5] <- checkresiduals(S02_Var02_ets, plot=FALSE)$p.value
+model_compare$Ljung_Box_p[6] <- checkresiduals(S02_Var02_arima, plot=FALSE)$p.value
+model_compare$Ljung_Box_p[7] <- checkresiduals(S02_Var03_ets, plot=FALSE)$p.value
+model_compare$Ljung_Box_p[8] <- checkresiduals(S02_Var03_arima, plot=FALSE)$p.value
+model_compare$Ljung_Box_p[9] <- checkresiduals(S03_Var05_ets, plot=FALSE)$p.value
+model_compare$Ljung_Box_p[10] <- checkresiduals(S03_Var05_arima, plot=FALSE)$p.value
+model_compare$Ljung_Box_p[11] <- checkresiduals(S03_Var07_ets, plot=FALSE)$p.value
+model_compare$Ljung_Box_p[12] <- checkresiduals(S03_Var07_arima, plot=FALSE)$p.value
+model_compare$Ljung_Box_p[13] <- checkresiduals(S04_Var01_ets, plot=FALSE)$p.value
+model_compare$Ljung_Box_p[14] <- checkresiduals(S04_Var01_arima, plot=FALSE)$p.value
+model_compare$Ljung_Box_p[15] <- checkresiduals(S04_Var02_ets, plot=FALSE)$p.value
+model_compare$Ljung_Box_p[16] <- checkresiduals(S04_Var02_arima, plot=FALSE)$p.value
+model_compare$Ljung_Box_p[17] <- checkresiduals(S05_Var02_ets, plot=FALSE)$p.value
+model_compare$Ljung_Box_p[18] <- checkresiduals(S05_Var02_arima, plot=FALSE)$p.value
+model_compare$Ljung_Box_p[19] <- checkresiduals(S05_Var03_ets, plot=FALSE)$p.value
+model_compare$Ljung_Box_p[20] <- checkresiduals(S05_Var03_arima, plot=FALSE)$p.value
+model_compare$Ljung_Box_p[21] <- checkresiduals(S06_Var05_ets, plot=FALSE)$p.value
+model_compare$Ljung_Box_p[22] <- checkresiduals(S06_Var05_arima, plot=FALSE)$p.value
+model_compare$Ljung_Box_p[23] <- checkresiduals(S06_Var07_ets, plot=FALSE)$p.value
+model_compare$Ljung_Box_p[24] <- checkresiduals(S06_Var07_arima, plot=FALSE)$p.value
+```
+
+```{r}
+model_compare
+```
+
+```{r}
+# Prepare data to plot the MAPE.
+# Since Var02 has a number scale much larger than the other variables, we have to scale the RMSE for Var02 models by multiplying 1/20 so they can be plotted in the same graph.
+
+model_compare2 <- model_compare
+model_compare2$CV_MAPE <- ifelse(model_compare2$Variable=="Var02",
+                                 model_compare2$CV_MAPE/20,
+                                 model_compare2$CV_MAPE)
+model_compare2$Train_MAPE <- ifelse(model_compare2$Variable=="Var02",
+                                    model_compare2$Train_MAPE/20,
+                                    model_compare2$Train_MAPE)
+```
+
+
+```{r}
+# Plot the training data MAPE. 
+ggplot(model_compare2, aes(x=paste0(Group, Variable), y=Train_MAPE, group=Model_Type)) +
+  geom_line(aes(linetype=Model_Type))+
+  geom_point(aes(shape=Model_Type))+
+  theme(axis.text.x = element_text(angle = 90))+
+  labs(title="MAPE of models",
+       caption = "MAPE for Var02 time series are scaled by 1/20") +
+  xlab("")
+```
+
+```{r}
+# Plot the Cross-Validation MAPE. 
+ggplot(model_compare2, aes(x=paste0(Group, Variable), y=CV_MAPE, group=Model_Type)) +
+  geom_line(aes(linetype=Model_Type))+
+  geom_point(aes(shape=Model_Type))+
+  theme(axis.text.x = element_text(angle = 90))+
+  labs(title="MAPE of Cross-Validations",
+       caption = "MAPE for Var02 time series are scaled by 1/20") +
+  xlab("")
+```
+
+
+```{r}
+# Plot the ljung-box test p-value
+ggplot(model_compare2, aes(x=paste0(Group, Variable), y=Ljung_Box_p, group=Model_Type)) +
+  geom_line(aes(linetype=Model_Type))+
+  geom_point(aes(shape=Model_Type))+
+  theme(axis.text.x = element_text(angle = 90))+
+  xlab("")
+# The RMSE for ETS and ARIMA models are very close, with the ARIMA models perform slightly better.
+# The the ljung-box test p-values, the ARIMA models are fitting to the data better so we will choose the ARIMA models for forecasting
+```
+
+
+
+```{r}
+# Forcasting
+S01_Var01_forecast <- S01_Var01_arima %>% forecast(h=140)
+S01_Var02_forecast <- S01_Var02_arima %>% forecast(h=140)
+S02_Var02_forecast <- S02_Var02_arima %>% forecast(h=140)
+S02_Var03_forecast <- S02_Var03_arima %>% forecast(h=140)
+S03_Var05_forecast <- S03_Var05_arima %>% forecast(h=140)
+S03_Var07_forecast <- S03_Var07_arima %>% forecast(h=140)
+S04_Var01_forecast <- S04_Var01_arima %>% forecast(h=140)
+S04_Var02_forecast <- S04_Var02_arima %>% forecast(h=140)
+S05_Var02_forecast <- S05_Var02_arima %>% forecast(h=140)
+S05_Var03_forecast <- S05_Var03_arima %>% forecast(h=140)
+S06_Var05_forecast <- S06_Var05_arima %>% forecast(h=140)
+S06_Var07_forecast <- S06_Var07_arima %>% forecast(h=140)
+```
+
+```{r}
+# Forecast Plot
+S01_Var01_forecast %>% autoplot()
+S01_Var02_forecast %>% autoplot()
+S02_Var02_forecast %>% autoplot()
+S02_Var03_forecast %>% autoplot()
+S03_Var05_forecast %>% autoplot()
+S03_Var07_forecast %>% autoplot()
+S04_Var01_forecast %>% autoplot()
+S04_Var02_forecast %>% autoplot()
+S05_Var02_forecast %>% autoplot()
+S05_Var03_forecast %>% autoplot()
+S06_Var05_forecast %>% autoplot()
+S06_Var07_forecast %>% autoplot()
+```
+
+
+```{r}
+## Saving the result in csv
+# result_df <- data.frame(S01_Var01_forecast$mean,S01_Var02_forecast$mean,
+#                          S02_Var02_forecast$mean,S02_Var03_forecast$mean,
+#                          S03_Var05_forecast$mean,S03_Var07_forecast$mean,
+#                          S04_Var01_forecast$mean,S04_Var02_forecast$mean,
+#                          S05_Var02_forecast$mean,S05_Var03_forecast$mean,
+#                          S06_Var05_forecast$mean,S06_Var07_forecast$mean)
+# row.names(result_df) <- row.names(main_df)[1623:1762]
+# 
+# write.csv(result_df,"forecast.csv",row.names=TRUE)
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+```{r}
+### Report Section
+```
+
+
+# DATA 624 Summer 2022, Project #1
+
+\newpage
+
+# Executive Summary  
+  
+  
+In this project, we explored and pre-processed the data from a de-identified Excel spreadsheet, then generated forecasts for future time periods. 
+
+Upon exploration, the found that there are a few extreme outliers and missing values in the data. The extreme outliers and missing values were replaced/filled by reasonable values. For variables with strong correlations and sufficient data, linear regression models were used to produce the reasonable values. For the remaining missing values, linear interpolation was used. The linear interpolation method estimates the missing values so that the filled values and the adjacent available values in the time series are connected by a straight line. We also found that variable 02 is highly right-skewed so a log-transformation was applied to it when creating our time series models. 
+
+Two types of models were built for each time series, the ETS and ARIMA models. To identify the optimal model to develop these forecasts, we evaluated both ETS and ARIMA models by the MAPE (mean absolute percentage error) scores, and leveraged cross-validation to compare performance. Additionally, we performed goodness of fit checks by examining the residuals of the models. Ultimately, the ARIMA models performed best, and we finalized our forecast values from there.
+
+\newpage
+
+# Data Exploration
+  
+Out data is the observations for 6 individual categories (S01, S02, S03, S04, S05, S06) during a period of length 1622. Each observation contains 5 variables (Var01, Var02, Var03, Var05, Var07). So there are 6*5=30 time series (one per variable per category). In this analysis, we will focus on the following 12 time series and perform forecast the values for the next 140 periods:
+  
+* Group S01 – Var01, Var02
+* Group S02 – Var02, Var03
+* Group S03 – Var05, Var07
+* Group S04 – Var01, Var02
+* Group S05 – Var02, Var03
+* Group S06 – Var05, Var07
+  
+First, let look at the summary of the data:
+
+```{r include=TRUE}
+raw_summary
+```
+We have some **missing values in each variables**, these missing values will be imputed / filled with reasonable values before building our models. The variables also have maximum values much larger than the 3rd quartile (the value that is larger than 75% of all values in the same variable), there may be **extreme outliers** in the data.  
+  
+We can check the outliers and also the skewness of the variables form the boxplots.   
+The following are the boxplots of the 12 time series.
+
+```{r include=TRUE, fig.height=6, fig.width=8}
+par(mfrow=c(3,4))
+for (i in c(1:length(main_df_pre_process))) {
+  boxplot(main_df_pre_process[,i], main=colnames(main_df_pre_process)[i])
+}
+```
+Var02 of all categories are highly right skewed that may need to be transformed to stabilize the variance.  
+S02_Var03, S06_Var05, and S06_Var07 have an extreme outlier.  
+If the extreme outliers are excluded, all Variables except Var02 have stable variance and no transformation is needed.  
+We will remove the extreme outliers and impute them with reasonable values along with other missing values.  
+
+
+# Data Preparation
+  
+## Missing Values Imputation
+  
+The following are the records with missing value for our original data.
+
+```{r include=TRUE}
+raw_na
+```
+
+We can checking the correlations between variables. A correlation close to 1 or -1 is considered as a strong correlation between two variables. That is, the value of one variable is highly dependent to the other variable. We can use linear models to impute the missing values of one variable using another variable.
+
+
+```{r include=TRUE, fig.height=3, fig.width=3}
+corrplot(cor(raw_df[,c(3:7)], use = "na.or.complete"), 
+         method = 'number', order = "hclust",
+         type = 'lower', diag = FALSE, tl.srt = 0.1)
+```
+
+From the correlation plot, Var03, Var05, and Var07 are highly correlated to Var01. Var02 seems to be independent to the other variables.  
+We can impute the missing values of Var03, Var05, and Var07 where Var01 is available, using linear regression models. The summaries of the models (see Appendix A) show that the linear models are fitting to the data really well as indicated by an R-Squared score of almost 1.
+For records with all Var01, Var03, Var05, and Var07 missing, We will fill in the missing values using the linear interpolation method.  
+  
+The linear interpolation method connects the previous and next available values by a straight line and fill in the missing values by the points fall on the line. For example, we have the following 2 missing values for group S01 Variable 01:
+
+```{r include=TRUE}
+main_df_pre_interpolation[,c(1,2)]
+```
+The missing values are filled by 51.55 and 51.47 which are on the line connecting 51.63 and 51.4 with equal distance.
+
+```{r include=TRUE}
+main_df_post_interpolation[,c(1,2)]
+```
+
+```{r fig.height=3, fig.width=4, include=TRUE}
+interpolation_example <- main_df_post_interpolation[,c(1,2)]
+plot(interpolation_example$S01_Var01, type = "b", pch = 19, 
+     col = c("black","black","red","red","black","black"), xlab="", ylab="")
+legend("topleft", legend=c("Imputed Values", "Existing Values"),
+       col=c("red", "black"), fill=c("red", "black"))
+
+```
+
+
+
+## Data Transformation
+  
+As we have seen from the boxplots above, Var02 is highly right skewed. We will transform the variable using the Box-Cox Transformation method.
+The Box-Cox Transformation finds the optimal power that can be applied to the data so that the transformed data is close to the normal distribution.
+
+```{r include=TRUE, fig.height=2.5, fig.width=3}
+boxcox(lm(raw_df$Var02 ~ 1))
+```
+
+A parameter close to 0 suggests that a log-transformation is appropriate.  
+
+  
+The followings are the boxplots of the log-transformated values for Var02 time series
+```{r include=TRUE, fig.height=2, fig.width=8}
+par(mfrow=c(1,4))
+boxplot(log(main_df_pre_process$S01_Var02), main="S01_Var02_Log")
+boxplot(log(main_df_pre_process$S02_Var02), main="S02_Var02_Log")
+boxplot(log(main_df_pre_process$S04_Var02), main="S04_Var02_Log")
+boxplot(log(main_df_pre_process$S05_Var02), main="S05_Var02_Log")
+```
+The variance is much stabler than before.
+
+
+
+# Time Series Exploration
+  
+## Time Plots
+  
+```{r include=TRUE, fig.height=5, fig.width=10}
+autoplot(S01_Var01_ts) +
+autoplot(S03_Var05_ts) +
+autoplot(S03_Var07_ts) +
+autoplot(S04_Var01_ts) +
+autoplot(S06_Var05_ts) +
+autoplot(S06_Var07_ts) +
+  plot_layout(ncol = 2, guides = "collect")
+```
+
+* There is no apparent seasonal behaviours in the time series for Var01, Var05, and Var07.
+* There are apparent trends in the time series for Var01, Var05, and Var07.
+
+```{r include=TRUE, fig.height=1.8, fig.width=10}
+autoplot(S02_Var03_ts) +
+autoplot(S05_Var03_ts) +
+  plot_layout(ncol = 2, guides = "collect")
+```
+
+* There is no apparent seasonal behaviours in the time series for Var03.
+* Var03 seems to have cyclic behaviours instead of trends.
+
+```{r include=TRUE, fig.height=3.5, fig.width=10}
+autoplot(S01_Var02_ts) +
+autoplot(S02_Var02_ts) +
+autoplot(S04_Var02_ts) +
+autoplot(S05_Var02_ts) +
+  plot_layout(ncol = 2, guides = "collect")
+```
+
+The time series for Var02 do not have apparent patterns. We may need to check the autocorrelations to verify if they are stationary.  
+
+## ACF and PACF Plots
+  
+The ACF (Auto Correlation Function) plot and PACF (Partial Auto Correlation Function) show how strong that a value in a time series depends on its past values. A time series with high autocorrelation is non-stationary and hence there are predictable patterns.
+
+```{r include=TRUE, fig.height=2, fig.width=10}
+# ACF and PACF
+ggAcf(S01_Var01_ts) + ggPacf(S01_Var01_ts) + plot_layout(ncol = 2, guides = "collect")
+ggAcf(S01_Var02_ts) + ggPacf(S01_Var02_ts) + plot_layout(ncol = 2, guides = "collect")
+ggAcf(S02_Var02_ts) + ggPacf(S02_Var02_ts) + plot_layout(ncol = 2, guides = "collect")
+ggAcf(S02_Var03_ts) + ggPacf(S02_Var03_ts) + plot_layout(ncol = 2, guides = "collect")
+ggAcf(S03_Var05_ts) + ggPacf(S03_Var05_ts) + plot_layout(ncol = 2, guides = "collect")
+ggAcf(S03_Var07_ts) + ggPacf(S03_Var07_ts) + plot_layout(ncol = 2, guides = "collect")
+ggAcf(S04_Var01_ts) + ggPacf(S04_Var01_ts) + plot_layout(ncol = 2, guides = "collect")
+ggAcf(S04_Var02_ts) + ggPacf(S04_Var02_ts) + plot_layout(ncol = 2, guides = "collect")
+ggAcf(S05_Var02_ts) + ggPacf(S05_Var02_ts) + plot_layout(ncol = 2, guides = "collect")
+ggAcf(S05_Var03_ts) + ggPacf(S05_Var03_ts) + plot_layout(ncol = 2, guides = "collect")
+ggAcf(S06_Var05_ts) + ggPacf(S06_Var05_ts) + plot_layout(ncol = 2, guides = "collect")
+ggAcf(S06_Var07_ts) + ggPacf(S06_Var07_ts) + plot_layout(ncol = 2, guides = "collect")
+```
+
+
+
+All time series have significant autocorrelations (the ones with correlation higher than the threshold indicated by the blue dashed lines) for multiple lags in the ACF plots.
+The autocorrelations in the PACF plots are not so strong.
+We confirm that the time series are non-stationary.
+
+# Building models
+  
+## Modeling Approach
+  
+The are generally two popular types of time series models: *Exponential Smoothing* (ETS) model and *ARIMA* (AutoRegressive Integrated Moving Average) model.
+The fitted values of an *Exponential Smoothing* model are affected by all past values, while the fitted values of an *ARIMA* model are affected by a number of most recent past values.  
+   
+For each of the 12 time series, we perform the followings:  
+
+* Build the optimal *Exponential Smoothing* (ETS) model (log-transformation applied to the Var02 to stabilize the variance).
+* Build the optimal *ARIMA* model (log-transformation applied to the Var02 to stabilize the variance).
+* Perform cross-validation on the modeling method of *Exponential Smoothing*. Cross-validation is used to verify how well the model performs with unseen data.
+* Perform cross-validation on the modeling method of *ARIMA*. Cross-validation is used to verify how well the model performs with unseen data.
+* Compare the RMSE (Root Mean Squared Error) of models from the training data and cross-validation.
+* Verify if there is any lack of fit by checking the residuals from the models.
+* Select the most appropriate model for forecasting.
+
+The summaries of the *Exponential Smoothing* models are showed in Appendix B and the summaries of the *ARIMA* models are showed in Appendix C.
+
+## Model Performance
+  
+The MAPE (mean absolute percentage error) is one of the measurements that evaluate the distance between a model's fitted values and the actual values. For example, an MAPE of 0.8 (percent) indicates that the model's fitted values is about $\pm0.80\%$ to the actual values **on average**. A smaller MAPE usually implies better performance.  
+
+The following are the MAPE values of the models.
+
+```{r include=TRUE, fig.height=3, fig.width=6}
+# Plot the training data MAPE. 
+ggplot(model_compare2, aes(x=paste0(Group, Variable), y=Train_MAPE, group=Model_Type)) +
+  geom_line(aes(linetype=Model_Type))+
+  geom_point(aes(shape=Model_Type))+
+  theme(axis.text.x = element_text(angle = 90))+
+  labs(title="MAPE of models",
+       caption = "MAPE for Var02 time series are scaled by 1/20") +
+  xlab("")
+```
+
+The MAPE from the models are used to check the performance of the models based on the *training data*. From the plot, the *ARIMA* models and *Exponential Smoothing** models have very close performance. The *ARIMA* models are slightly better.  
+  
+The following are the MAPE values from the outputs of Cross-Validations.
+
+```{r include=TRUE, fig.height=3, fig.width=6}
+# Plot the Cross-Validation MAPE. 
+ggplot(model_compare2, aes(x=paste0(Group, Variable), y=CV_MAPE, group=Model_Type)) +
+  geom_line(aes(linetype=Model_Type))+
+  geom_point(aes(shape=Model_Type))+
+  theme(axis.text.x = element_text(angle = 90))+
+  labs(title="MAPE of Cross-Validations",
+       caption = "MAPE for Var02 time series are scaled by 1/20") +
+  xlab("")
+```
+
+The MAPE of Cross-Validations are used to check the performance of the models with *unseen data*. From the plot, the *ARIMA* models and *Exponential Smoothing** models have very close performance. The *ARIMA* models are slightly better in most cases.
+   
+## Goodness of Fit
+  
+We can also verify how well the models fit in the data. We use the Ljung Box test on the residuals of the models. The null hypothesis of the test is that there is no significant autocorrelations in the model's residuals, that is, the model explains all the variance / patterns of the data. A higher p-value implies that the model is fitting the data better. Details of the residuals verification are showed in Appendix D and E.  
+  
+The p-values of the tests for the models are showed in the plot below.
+
+```{r include=TRUE, fig.height=3, fig.width=6}
+# Plot the ljung-box test p-value
+ggplot(model_compare2, aes(x=paste0(Group, Variable), y=Ljung_Box_p, group=Model_Type)) +
+  geom_line(aes(linetype=Model_Type))+
+  geom_point(aes(shape=Model_Type))+
+  labs(title="Goodness of Fit")+
+  theme(axis.text.x = element_text(angle = 90))+
+  xlab("")
+```
+
+Based on the ljung-box test p-values, the ARIMA models are fitting to the data better so we will choose the ARIMA models for forecasting.
+
+# Model Forecast
+  
+We forecast the values for the 12 times in the next 140 periods.  
+The solid line represents the expected values. The dark blue area represents the 80% confidence interval, which indicates that there is 80% chance that the forecasted values will fall within that area. The light blue area represents the 95% confidence interval, there is 95% chance that the forecasted values will be in the area. The width of the confidence interval is increasing, which is reasonable since the uncertainty increases accordingly to the length of time.
+
+```{r include=TRUE, fig.height=5, fig.width=10}
+S01_Var01_forecast %>% autoplot() +
+S03_Var05_forecast %>% autoplot() +
+S03_Var07_forecast %>% autoplot() +
+S04_Var01_forecast %>% autoplot() +
+S06_Var05_forecast %>% autoplot() +
+S06_Var07_forecast %>% autoplot() +
+ plot_layout(ncol = 2, guides = "collect")
+```
+
+```{r include=TRUE, fig.height=1.8, fig.width=10}
+S02_Var03_forecast %>% autoplot() +
+S05_Var03_forecast %>% autoplot() +
+ plot_layout(ncol = 2, guides = "collect")
+```
+
+```{r include=TRUE, fig.height=3.5, fig.width=10}
+S01_Var02_forecast %>% autoplot() +
+S02_Var02_forecast %>% autoplot() +
+S04_Var02_forecast %>% autoplot() +
+S05_Var02_forecast %>% autoplot() +
+ plot_layout(ncol = 2, guides = "collect")
+```
+
+# Summary
+  
+This data was de-identified, and as such, an exercise in using pure analysis to generate a forecast, vs. relying on or leveraging data intuition. Further, with missing values and a highly-skewed variable, this data emphasized how pre-processing was critical to develop performant models and forecasts. While MAPE performance between the two model types (**Exponential Smoothing** and **ARIMA**) was close, we found that the ARIMA models have better ability (goodness-of-fit) in capturing the predictable patterns of the data. The ARIMA models are then determined to be the better models to produce plausible forecasts. 
+
+
+```{r}
+### Appendices Section
+```
+
+\newpage
+
+# Appendices
+  
+## A. Missing Value Imputation Linear Models Summaries
+  
+**Model for imputing Var03**
+
+```{r include=TRUE}
+summary(var03_lm)
+```
+
+**Model for imputing Var05**
+
+```{r include=TRUE}
+summary(var05_lm)
+```
+
+**Model for imputing Var07**
+
+```{r include=TRUE}
+summary(var07_lm)
+```
+
+\newpage
+
+## B. *Exponential Smoothing* (ETS) Models Summaries
+  
+**S01_Var01**
+
+```{r include=TRUE}
+summary(S01_Var01_ets)
+```
+
+**S01_Var02**
+
+```{r include=TRUE}
+summary(S01_Var02_ets)
+```
+
+**S02_Var02**
+
+```{r include=TRUE}
+summary(S02_Var02_ets)
+```
+
+**S02_Var03**
+
+```{r include=TRUE}
+summary(S02_Var03_ets)
+```
+
+**S03_Var05**
+
+```{r include=TRUE}
+summary(S03_Var05_ets)
+```
+
+**S03_Var07**
+
+```{r include=TRUE}
+summary(S03_Var07_ets)
+```
+
+**S04_Var01**
+
+```{r include=TRUE}
+summary(S04_Var01_ets)
+```
+
+**S04_Var02**
+
+```{r include=TRUE}
+summary(S04_Var02_ets)
+```
+
+**S05_Var02**
+
+```{r include=TRUE}
+summary(S05_Var02_ets)
+```
+
+**S05_Var03**
+
+```{r include=TRUE}
+summary(S05_Var03_ets)
+```
+
+**S06_Var05**
+
+```{r include=TRUE}
+summary(S06_Var05_ets)
+```
+
+**S06_Var07**
+
+```{r include=TRUE}
+summary(S06_Var07_ets)
+```
+
+\newpage
+
+## C. *ARIMA* Models Summaries
+  
+**S01_Var01**
+
+```{r include=TRUE}
+summary(S01_Var01_arima)
+```
+
+**S01_Var02**
+
+```{r include=TRUE}
+summary(S01_Var02_arima)
+```
+
+**S02_Var02**
+
+```{r include=TRUE}
+summary(S02_Var02_arima)
+```
+
+**S02_Var03**
+
+```{r include=TRUE}
+summary(S02_Var03_arima)
+```
+
+**S03_Var05**
+
+```{r include=TRUE}
+summary(S03_Var05_arima)
+```
+
+**S03_Var07**
+
+```{r include=TRUE}
+summary(S03_Var07_arima)
+```
+
+**S04_Var01**
+
+```{r include=TRUE}
+summary(S04_Var01_arima)
+```
+
+**S04_Var02**
+
+```{r include=TRUE}
+summary(S04_Var02_arima)
+```
+
+**S05_Var02**
+
+```{r include=TRUE}
+summary(S05_Var02_arima)
+```
+
+**S05_Var03**
+
+```{r include=TRUE}
+summary(S05_Var03_arima)
+```
+
+**S06_Var05**
+
+```{r include=TRUE}
+summary(S06_Var05_arima)
+```
+
+**S06_Var07**
+
+```{r include=TRUE}
+summary(S06_Var07_arima)
+```
+
+\newpage
+
+## D. *Exponential Smoothing* (ETS) Models Residuals
+  
+**S01_Var01**
+
+```{r include=TRUE}
+checkresiduals(S01_Var01_ets)
+```
+
+**S01_Var02**
+
+```{r fig.height=3, include=TRUE}
+checkresiduals(S01_Var02_ets)
+```
+
+**S02_Var02**
+
+```{r fig.height=3, include=TRUE}
+checkresiduals(S02_Var02_ets)
+```
+
+**S02_Var03**
+
+```{r fig.height=3, include=TRUE}
+checkresiduals(S02_Var03_ets)
+```
+
+**S03_Var05**
+
+```{r fig.height=3, include=TRUE}
+checkresiduals(S03_Var05_ets)
+```
+
+**S03_Var07**
+
+```{r fig.height=3, include=TRUE}
+checkresiduals(S03_Var07_ets)
+```
+
+**S04_Var01**
+
+```{r fig.height=3, include=TRUE}
+checkresiduals(S04_Var01_ets)
+```
+
+**S04_Var02**
+
+```{r fig.height=3, include=TRUE}
+checkresiduals(S04_Var02_ets)
+```
+
+**S05_Var02**
+
+```{r fig.height=3, include=TRUE}
+checkresiduals(S05_Var02_ets)
+```
+
+**S05_Var03**
+
+```{r fig.height=3, include=TRUE}
+checkresiduals(S05_Var03_ets)
+```
+
+**S06_Var05**
+
+```{r fig.height=3, include=TRUE}
+checkresiduals(S06_Var05_ets)
+```
+
+**S06_Var07**
+
+```{r fig.height=3, include=TRUE}
+checkresiduals(S06_Var07_ets)
+```
+
+\newpage
+
+## E. *ARIMA* Models Residuals
+  
+**S01_Var01**
+
+```{r fig.height=3, include=TRUE}
+checkresiduals(S01_Var01_arima)
+```
+
+**S01_Var02**
+
+```{r fig.height=3, include=TRUE}
+checkresiduals(S01_Var02_arima)
+```
+
+**S02_Var02**
+
+```{r fig.height=3, include=TRUE}
+checkresiduals(S02_Var02_arima)
+```
+
+**S02_Var03**
+
+```{r fig.height=3, include=TRUE}
+checkresiduals(S02_Var03_arima)
+```
+
+**S03_Var05**
+
+```{r fig.height=3, include=TRUE}
+checkresiduals(S03_Var05_arima)
+```
+
+**S03_Var07**
+
+```{r fig.height=3, include=TRUE}
+checkresiduals(S03_Var07_arima)
+```
+
+**S04_Var01**
+
+```{r fig.height=3, include=TRUE}
+checkresiduals(S04_Var01_arima)
+```
+
+**S04_Var02**
+
+```{r fig.height=3, include=TRUE}
+checkresiduals(S04_Var02_arima)
+```
+
+**S05_Var02**
+
+```{r fig.height=3, include=TRUE}
+checkresiduals(S05_Var02_arima)
+```
+
+**S05_Var03**
+
+```{r fig.height=3, include=TRUE}
+checkresiduals(S05_Var03_arima)
+```
+
+**S06_Var05**
+
+```{r fig.height=3, include=TRUE}
+checkresiduals(S06_Var05_arima)
+```
+
+**S06_Var07**
+
+```{r fig.height=3, include=TRUE}
+checkresiduals(S06_Var07_arima)
+```
+
+
+
+```{r}
+### Code Section
+```
+
+\newpage
+
+# Codes
+
+```{r message=FALSE, warning=FALSE, echo=TRUE, eval=FALSE, include=TRUE}
+# Loading packages
+library(fpp2)
+library(dplyr)
+library(tidyverse)
+library(corrplot)
+library(MASS)
+library(imputeTS)
+library(patchwork)
+library(ggplot2)
+
+
+
+# Loading the data set
+raw_df <- readxl::read_excel("Data Set for Class.xls")
+raw_df <- as.data.frame(raw_df)
+raw_df$group <- as.factor(raw_df$group)
+
+# Summary of the first 1622 periods. The remaining 140 periods are blank and need to be forecasted
+raw_summary <- summary(raw_df[c(1:(1622*6)),])
+raw_summary
+
+
+
+# Missing values in the observations
+raw_na <- raw_df[c(1:(1622*6)),][apply(is.na(raw_df[c(1:(1622*6)),]),1,any),]
+raw_na
+
+
+
+# Checking the correlations between variables. If the correlations are high, we can use linear models to impute the missing values of one variable using another variable.
+corrplot(cor(raw_df[,c(3:7)], use = "na.or.complete"), 
+         method = 'number', order = "hclust",
+         type = 'lower', diag = FALSE, tl.srt = 0.1)
+
+
+
+# Impute the missing values of Var03, Var05, Var07, where Var01 is available, using linear models
+
+var03_lm <- lm(Var03~Var01,raw_df)
+var05_lm <- lm(Var05~Var01,raw_df)
+var07_lm <- lm(Var07~Var01,raw_df)
+
+raw_df$Var03[!is.na(raw_df$Var01) & is.na(raw_df$Var03)] <-
+  predict(var03_lm,raw_df[!is.na(raw_df$Var01) & is.na(raw_df$Var03),])
+raw_df$Var05[!is.na(raw_df$Var01) & is.na(raw_df$Var05)] <-
+  predict(var03_lm,raw_df[!is.na(raw_df$Var01) & is.na(raw_df$Var05),])
+raw_df$Var07[!is.na(raw_df$Var01) & is.na(raw_df$Var07)] <-
+  predict(var03_lm,raw_df[!is.na(raw_df$Var01) & is.na(raw_df$Var07),])
+
+
+
+# Gather data into one data frame, with one column per group per selected variable
+S01_Var01 <- raw_df %>% filter(group=="S01") %>% dplyr::select("SeriesInd","Var01")
+S01_Var02 <- raw_df %>% filter(group=="S01") %>% dplyr::select("SeriesInd","Var02") 
+S02_Var02 <- raw_df %>% filter(group=="S02") %>% dplyr::select("SeriesInd","Var02")
+S02_Var03 <- raw_df %>% filter(group=="S02") %>% dplyr::select("SeriesInd","Var03")
+S03_Var05 <- raw_df %>% filter(group=="S03") %>% dplyr::select("SeriesInd","Var05")
+S03_Var07 <- raw_df %>% filter(group=="S03") %>% dplyr::select("SeriesInd","Var07")
+S04_Var01 <- raw_df %>% filter(group=="S04") %>% dplyr::select("SeriesInd","Var01")
+S04_Var02 <- raw_df %>% filter(group=="S04") %>% dplyr::select("SeriesInd","Var02")
+S05_Var02 <- raw_df %>% filter(group=="S05") %>% dplyr::select("SeriesInd","Var02")
+S05_Var03 <- raw_df %>% filter(group=="S05") %>% dplyr::select("SeriesInd","Var03")
+S06_Var05 <- raw_df %>% filter(group=="S06") %>% dplyr::select("SeriesInd","Var05")
+S06_Var07 <- raw_df %>% filter(group=="S06") %>% dplyr::select("SeriesInd","Var07")
+
+main_df <- data.frame(S01_Var01=S01_Var01[,2],
+                      S01_Var02=S01_Var02[,2],
+                      S02_Var02=S02_Var02[,2],
+                      S02_Var03=S02_Var03[,2],
+                      S03_Var05=S03_Var05[,2],
+                      S03_Var07=S03_Var07[,2],
+                      S04_Var01=S04_Var01[,2],
+                      S04_Var02=S04_Var02[,2],
+                      S05_Var02=S05_Var02[,2],
+                      S05_Var03=S05_Var03[,2],
+                      S06_Var05=S06_Var05[,2],
+                      S06_Var07=S06_Var07[,2])
+row.names(main_df) <- S01_Var01$SeriesInd
+
+main_df
+
+
+
+# Boxplots of the variables for checking outliers and skewness
+
+main_df_pre_process <- main_df
+
+par(mfrow=c(3,4))
+for (i in c(1:length(main_df_pre_process))) {
+  boxplot(main_df_pre_process[,i], main=colnames(main_df_pre_process)[i])
+}
+
+
+
+# remove the extreme outliers to be imputed later
+main_df$S02_Var03[which.max(main_df$S02_Var03)] <- NA
+main_df$S06_Var05[which.max(main_df$S06_Var05)] <- NA
+main_df$S06_Var07[which.max(main_df$S06_Var07)] <- NA
+
+
+
+# Finding lambda for Box-Cox Transformation for Var02
+boxcox(lm(raw_df$Var02 ~ 1))
+# A number near 0 suggested a log transformation should be used
+# Boxplot of Var02 after log transformation
+par(mfrow=c(1,4))
+boxplot(log(main_df_pre_process$S01_Var02), main="S01_Var02_Log")
+boxplot(log(main_df_pre_process$S02_Var02), main="S02_Var02_Log")
+boxplot(log(main_df_pre_process$S04_Var02), main="S04_Var02_Log")
+boxplot(log(main_df_pre_process$S05_Var02), main="S05_Var02_Log")
+
+
+
+# For remaining missing value, we will perform linear interpolation.
+# The following are examples of missing values before linear interpolation.
+main_df_pre_interpolation <-  main_df[c(1535:1540),]
+main_df_pre_interpolation
+
+# perform linear interpolation
+for (i in c(1:ncol(main_df))) {
+  main_df[c(1:1622),i] <- na_interpolation(main_df[c(1:1622),i])
+}
+
+# The following are the values after imputation by linear interpolation.
+main_df_post_interpolation <- main_df[c(1535:1540),]
+main_df_post_interpolation
+
+
+
+# Data is ready for modeling
+# Create time series objects
+S01_Var01_ts <- ts(main_df$S01_Var01[1:1622],start=as.integer(raw_df$SeriesInd[1]), frequency = 1)
+S01_Var02_ts <- ts(main_df$S01_Var02[1:1622],start=as.integer(raw_df$SeriesInd[1]), frequency = 1)
+S02_Var02_ts <- ts(main_df$S02_Var02[1:1622],start=as.integer(raw_df$SeriesInd[1]), frequency = 1)
+S02_Var03_ts <- ts(main_df$S02_Var03[1:1622],start=as.integer(raw_df$SeriesInd[1]), frequency = 1)
+S03_Var05_ts <- ts(main_df$S03_Var05[1:1622],start=as.integer(raw_df$SeriesInd[1]), frequency = 1)
+S03_Var07_ts <- ts(main_df$S03_Var07[1:1622],start=as.integer(raw_df$SeriesInd[1]), frequency = 1)
+S04_Var01_ts <- ts(main_df$S04_Var01[1:1622],start=as.integer(raw_df$SeriesInd[1]), frequency = 1)
+S04_Var02_ts <- ts(main_df$S04_Var02[1:1622],start=as.integer(raw_df$SeriesInd[1]), frequency = 1)
+S05_Var02_ts <- ts(main_df$S05_Var02[1:1622],start=as.integer(raw_df$SeriesInd[1]), frequency = 1)
+S05_Var03_ts <- ts(main_df$S05_Var03[1:1622],start=as.integer(raw_df$SeriesInd[1]), frequency = 1)
+S06_Var05_ts <- ts(main_df$S06_Var05[1:1622],start=as.integer(raw_df$SeriesInd[1]), frequency = 1)
+S06_Var07_ts <- ts(main_df$S06_Var07[1:1622],start=as.integer(raw_df$SeriesInd[1]), frequency = 1)
+
+
+
+# Time Plot
+autoplot(S01_Var01_ts) +
+autoplot(S01_Var02_ts) +
+autoplot(S02_Var02_ts) +
+autoplot(S02_Var03_ts) +
+autoplot(S03_Var05_ts) +
+autoplot(S03_Var07_ts) +
+autoplot(S04_Var01_ts) +
+autoplot(S04_Var02_ts) +
+autoplot(S05_Var02_ts) +
+autoplot(S05_Var03_ts) +
+autoplot(S06_Var05_ts) +
+autoplot(S06_Var07_ts) +
+  plot_layout(ncol = 1, guides = "collect")
+
+
+
+# ACF and PACF
+ggAcf(S01_Var01_ts) + ggPacf(S01_Var01_ts) +
+ggAcf(S01_Var02_ts) + ggPacf(S01_Var02_ts) +
+ggAcf(S02_Var02_ts) + ggPacf(S02_Var02_ts) +
+ggAcf(S02_Var03_ts) + ggPacf(S02_Var03_ts) +
+ggAcf(S03_Var05_ts) + ggPacf(S03_Var05_ts) +
+ggAcf(S03_Var07_ts) + ggPacf(S03_Var07_ts) +
+ggAcf(S04_Var01_ts) + ggPacf(S04_Var01_ts) +
+ggAcf(S04_Var02_ts) + ggPacf(S04_Var02_ts) +
+ggAcf(S05_Var02_ts) + ggPacf(S05_Var02_ts) +
+ggAcf(S05_Var03_ts) + ggPacf(S05_Var03_ts) +
+ggAcf(S06_Var05_ts) + ggPacf(S06_Var05_ts) +
+ggAcf(S06_Var07_ts) + ggPacf(S06_Var07_ts) +
+  plot_layout(ncol = 2, guides = "collect")
+
+
+
+# Buildling models
+# For each time series, we build an optimal ETS model an an optimal ARIMA model based on the AIC scores.
+
+S01_Var01_ets <- ets(S01_Var01_ts)
+S01_Var01_arima <- auto.arima(S01_Var01_ts, stepwise=FALSE, approximation=FALSE)
+
+S01_Var02_ets <- ets(S01_Var02_ts, lambda = 0)
+S01_Var02_arima <- auto.arima(S01_Var02_ts, lambda = 0, stepwise=FALSE, approximation=FALSE)
+
+S02_Var02_ets <- ets(S02_Var02_ts, lambda = 0)
+S02_Var02_arima <- auto.arima(S02_Var02_ts, lambda = 0, stepwise=FALSE, approximation=FALSE)
+
+S02_Var03_ets <- ets(S02_Var03_ts)
+S02_Var03_arima <- auto.arima(S02_Var03_ts, stepwise=FALSE, approximation=FALSE)
+
+S03_Var05_ets <- ets(S03_Var05_ts)
+S03_Var05_arima <- auto.arima(S03_Var05_ts, stepwise=FALSE, approximation=FALSE)
+
+S03_Var07_ets <- ets(S03_Var07_ts)
+S03_Var07_arima <- auto.arima(S03_Var07_ts, stepwise=FALSE, approximation=FALSE)
+
+S04_Var01_ets <- ets(S04_Var01_ts)
+S04_Var01_arima <- auto.arima(S04_Var01_ts, stepwise=FALSE, approximation=FALSE)
+
+S04_Var02_ets <- ets(S04_Var02_ts, lambda = 0)
+S04_Var02_arima <- auto.arima(S04_Var02_ts, lambda = 0, stepwise=FALSE, approximation=FALSE)
+
+S05_Var02_ets <- ets(S05_Var02_ts, lambda = 0)
+S05_Var02_arima <- auto.arima(S05_Var02_ts, lambda = 0, stepwise=FALSE, approximation=FALSE)
+
+S05_Var03_ets <- ets(S05_Var03_ts)
+S05_Var03_arima <- auto.arima(S05_Var03_ts, stepwise=FALSE, approximation=FALSE)
+
+S06_Var05_ets <- ets(S06_Var05_ts)
+S06_Var05_arima <- auto.arima(S06_Var05_ts, stepwise=FALSE, approximation=FALSE)
+
+S06_Var07_ets <- ets(S06_Var07_ts)
+S06_Var07_arima <- auto.arima(S06_Var07_ts, stepwise=FALSE, approximation=FALSE)
+
+
+
+# Perform Cross-Validation for both Exponential Smoothing (ETS) and ARIMA models
+# The process takes more than an hour so the pre-calculated results at the end of the block can be used to save time
+
+# fets <- function(x, h) {
+#   forecast(ets(x), h = h)
+# }
+# 
+# farima <- function(x, h) {
+#   forecast(auto.arima(x), h=h)
+# }
+# 
+# fets2 <- function(x, h) {
+#   forecast(ets(x, lambda=0), h = h)
+# }
+# 
+# farima2 <- function(x, h) {
+#   forecast(auto.arima(x, lambda=0), h=h)
+# }
+# 
+# #Function to calculate the MAPE using the result from the tsCV() function
+# mape <- function(cv_e, ts) {
+#   return(
+#     mean(abs(cv_e[1:(length(cv_e)-sum(is.na(cv_e)))]/
+#                ts[-sum(is.na(cv_e))]))*100 #multiply 100 to represent the number in percentage, which is consistent with the output from a time series model
+#   )
+# }
+# 
+# e1 <- tsCV(S01_Var01_ts, fets, h=1)
+# e2 <- tsCV(S01_Var01_ts, farima, h=1)
+# S01_Var01_ets_cv <- mape(e1, S01_Var01_ts)
+# S01_Var01_arima_cv <- mape(e2, S01_Var01_ts)
+# 
+# e1 <- tsCV(S01_Var02_ts, fets2, h=1)
+# e2 <- tsCV(S01_Var02_ts, farima2, h=1)
+# S01_Var02_ets_cv <- mape(e1, S01_Var02_ts)
+# S01_Var02_arima_cv <- mape(e2, S01_Var02_ts)
+# 
+# e1 <- tsCV(S02_Var02_ts, fets2, h=1)
+# e2 <- tsCV(S02_Var02_ts, farima2, h=1)
+# S02_Var02_ets_cv <- mape(e1, S02_Var02_ts)
+# S02_Var02_arima_cv <- mape(e2, S02_Var02_ts)
+# 
+# e1 <- tsCV(S02_Var03_ts, fets, h=1)
+# e2 <- tsCV(S02_Var03_ts, farima, h=1)
+# S02_Var03_ets_cv <- mape(e1, S02_Var03_ts)
+# S02_Var03_arima_cv <- mape(e2, S02_Var03_ts)
+# 
+# e1 <- tsCV(S03_Var05_ts, fets, h=1)
+# e2 <- tsCV(S03_Var05_ts, farima, h=1)
+# S03_Var05_ets_cv <- mape(e1, S03_Var05_ts)
+# S03_Var05_arima_cv <- mape(e2, S03_Var05_ts)
+# 
+# e1 <- tsCV(S03_Var07_ts, fets, h=1)
+# e2 <- tsCV(S03_Var07_ts, farima, h=1)
+# S03_Var07_ets_cv <- mape(e1, S03_Var07_ts)
+# S03_Var07_arima_cv <- mape(e2, S03_Var07_ts)
+# 
+# e1 <- tsCV(S04_Var01_ts, fets, h=1)
+# e2 <- tsCV(S04_Var01_ts, farima, h=1)
+# S04_Var01_ets_cv <- mape(e1, S04_Var01_ts)
+# S04_Var01_arima_cv <- mape(e2, S04_Var01_ts)
+# 
+# e1 <- tsCV(S04_Var02_ts, fets2, h=1)
+# e2 <- tsCV(S04_Var02_ts, farima2, h=1)
+# S04_Var02_ets_cv <- mape(e1, S04_Var02_ts)
+# S04_Var02_arima_cv <- mape(e2, S04_Var02_ts)
+# 
+# e1 <- tsCV(S05_Var02_ts, fets2, h=1)
+# e2 <- tsCV(S05_Var02_ts, farima2, h=1)
+# S05_Var02_ets_cv <- mape(e1, S05_Var02_ts)
+# S05_Var02_arima_cv <- mape(e2, S05_Var02_ts)
+# 
+# e1 <- tsCV(S05_Var03_ts, fets, h=1)
+# e2 <- tsCV(S05_Var03_ts, farima, h=1)
+# S05_Var03_ets_cv <- mape(e1, S05_Var03_ts)
+# S05_Var03_arima_cv <- mape(e2, S05_Var03_ts)
+# 
+# e1 <- tsCV(S06_Var05_ts, fets, h=1)
+# e2 <- tsCV(S06_Var05_ts, farima, h=1)
+# S06_Var05_ets_cv <- mape(e1, S06_Var05_ts)
+# S06_Var05_arima_cv <- mape(e2, S06_Var05_ts)
+# 
+# e1 <- tsCV(S06_Var07_ts, fets, h=1)
+# e2 <- tsCV(S06_Var07_ts, farima, h=1)
+# S06_Var07_ets_cv <- mape(e1, S06_Var07_ts)
+# S06_Var07_arima_cv <- mape(e2, S06_Var07_ts)
+
+# The followings are the pre-calculated results
+
+S01_Var01_ets_cv <- 0.9177038
+S01_Var01_arima_cv <- 0.9208322
+S01_Var02_ets_cv <- 25.73889
+S01_Var02_arima_cv <- 24.89347
+S02_Var02_ets_cv <- 26.99113
+S02_Var02_arima_cv <- 25.61222
+S02_Var03_ets_cv <- 1.371266
+S02_Var03_arima_cv <- 1.389502
+S03_Var05_ets_cv <- 1.331599
+S03_Var05_arima_cv <- 1.337125
+S03_Var07_ets_cv <- 1.231979
+S03_Var07_arima_cv <- 1.236644
+S04_Var01_ets_cv <- 1.22556
+S04_Var01_arima_cv <- 1.277181
+S04_Var02_ets_cv <- 30.88217
+S04_Var02_arima_cv <- 29.31935
+S05_Var02_ets_cv <- 19.29705
+S05_Var02_arima_cv <- 18.863
+S05_Var03_ets_cv <- 0.814632
+S05_Var03_arima_cv <- 0.8129907
+S06_Var05_ets_cv <- 1.132529
+S06_Var05_arima_cv <- 1.141299
+S06_Var07_ets_cv <- 1.147087
+S06_Var07_arima_cv <- 1.152259
+
+
+
+# Gather the performance results in one dataframe for comparison
+# The table includes the MAPE from the training data and the MAPE from the Cross-Validations
+model_compare <- 
+  data.frame(Group=c("S01","S01","S01","S01",
+                     "S02","S02","S02","S02",
+                     "S03","S03","S03","S03",
+                     "S04","S04","S04","S04",
+                     "S05","S05","S05","S05",
+                     "S06","S06","S06","S06"),
+             Variable=c("Var01","Var01","Var02","Var02",
+                        "Var02","Var02","Var03","Var03",
+                        "Var05","Var05","Var07","Var07",
+                        "Var01","Var01","Var02","Var02",
+                        "Var02","Var02","Var03","Var03",
+                        "Var05","Var05","Var07","Var07"),
+             Model_Type=c("Exponential Smoothing","ARIMA","Exponential Smoothing","ARIMA",
+                          "Exponential Smoothing","ARIMA","Exponential Smoothing","ARIMA",
+                          "Exponential Smoothing","ARIMA","Exponential Smoothing","ARIMA",
+                          "Exponential Smoothing","ARIMA","Exponential Smoothing","ARIMA",
+                          "Exponential Smoothing","ARIMA","Exponential Smoothing","ARIMA",
+                          "Exponential Smoothing","ARIMA","Exponential Smoothing","ARIMA"),
+             Model=c(as.character(S01_Var01_ets),as.character(S01_Var01_arima),
+                     as.character(S01_Var02_ets),as.character(S01_Var02_arima),
+                     as.character(S02_Var02_ets),as.character(S02_Var02_arima),
+                     as.character(S02_Var03_ets),as.character(S02_Var03_arima),
+                     as.character(S03_Var05_ets),as.character(S03_Var05_arima),
+                     as.character(S03_Var07_ets),as.character(S03_Var07_arima),
+                     as.character(S04_Var01_ets),as.character(S04_Var01_arima),
+                     as.character(S04_Var02_ets),as.character(S04_Var02_arima),
+                     as.character(S05_Var02_ets),as.character(S05_Var02_arima),
+                     as.character(S05_Var03_ets),as.character(S05_Var03_arima),
+                     as.character(S06_Var05_ets),as.character(S06_Var05_arima),
+                     as.character(S06_Var07_ets),as.character(S06_Var07_arima)),
+             CV_MAPE=c(S01_Var01_ets_cv, S01_Var01_arima_cv,
+                       S01_Var02_ets_cv, S01_Var02_arima_cv,
+                       S02_Var02_ets_cv, S02_Var02_arima_cv,
+                       S02_Var03_ets_cv, S02_Var03_arima_cv,
+                       S03_Var05_ets_cv, S03_Var05_arima_cv,
+                       S03_Var07_ets_cv, S03_Var07_arima_cv,
+                       S04_Var01_ets_cv, S04_Var01_arima_cv,
+                       S04_Var02_ets_cv, S04_Var02_arima_cv,
+                       S05_Var02_ets_cv, S05_Var02_arima_cv,
+                       S05_Var03_ets_cv, S05_Var03_arima_cv,
+                       S06_Var05_ets_cv, S06_Var05_arima_cv,
+                       S06_Var07_ets_cv, S06_Var07_arima_cv),
+             Train_MAPE=c(accuracy(S01_Var01_ets)[5],accuracy(S01_Var01_arima)[5],
+                          accuracy(S01_Var02_ets)[5],accuracy(S01_Var02_arima)[5],
+                          accuracy(S02_Var02_ets)[5],accuracy(S02_Var02_arima)[5],
+                          accuracy(S02_Var03_ets)[5],accuracy(S02_Var03_arima)[5],
+                          accuracy(S03_Var05_ets)[5],accuracy(S03_Var05_arima)[5],
+                          accuracy(S03_Var07_ets)[5],accuracy(S03_Var07_arima)[5],
+                          accuracy(S04_Var01_ets)[5],accuracy(S04_Var01_arima)[5],
+                          accuracy(S04_Var02_ets)[5],accuracy(S04_Var02_arima)[5],
+                          accuracy(S05_Var02_ets)[5],accuracy(S05_Var02_arima)[5],
+                          accuracy(S05_Var03_ets)[5],accuracy(S05_Var03_arima)[5],
+                          accuracy(S06_Var05_ets)[5],accuracy(S06_Var05_arima)[5],
+                          accuracy(S06_Var07_ets)[5],accuracy(S06_Var07_arima)[5]))
+
+# Adding the p=value from the ljung-box test to compare the goodness of fit for each model
+model_compare$Ljung_Box_p[1] <- checkresiduals(S01_Var01_ets, plot=FALSE)$p.value
+model_compare$Ljung_Box_p[2] <- checkresiduals(S01_Var01_arima, plot=FALSE)$p.value
+model_compare$Ljung_Box_p[3] <- checkresiduals(S01_Var02_ets, plot=FALSE)$p.value
+model_compare$Ljung_Box_p[4] <- checkresiduals(S01_Var02_arima, plot=FALSE)$p.value
+model_compare$Ljung_Box_p[5] <- checkresiduals(S02_Var02_ets, plot=FALSE)$p.value
+model_compare$Ljung_Box_p[6] <- checkresiduals(S02_Var02_arima, plot=FALSE)$p.value
+model_compare$Ljung_Box_p[7] <- checkresiduals(S02_Var03_ets, plot=FALSE)$p.value
+model_compare$Ljung_Box_p[8] <- checkresiduals(S02_Var03_arima, plot=FALSE)$p.value
+model_compare$Ljung_Box_p[9] <- checkresiduals(S03_Var05_ets, plot=FALSE)$p.value
+model_compare$Ljung_Box_p[10] <- checkresiduals(S03_Var05_arima, plot=FALSE)$p.value
+model_compare$Ljung_Box_p[11] <- checkresiduals(S03_Var07_ets, plot=FALSE)$p.value
+model_compare$Ljung_Box_p[12] <- checkresiduals(S03_Var07_arima, plot=FALSE)$p.value
+model_compare$Ljung_Box_p[13] <- checkresiduals(S04_Var01_ets, plot=FALSE)$p.value
+model_compare$Ljung_Box_p[14] <- checkresiduals(S04_Var01_arima, plot=FALSE)$p.value
+model_compare$Ljung_Box_p[15] <- checkresiduals(S04_Var02_ets, plot=FALSE)$p.value
+model_compare$Ljung_Box_p[16] <- checkresiduals(S04_Var02_arima, plot=FALSE)$p.value
+model_compare$Ljung_Box_p[17] <- checkresiduals(S05_Var02_ets, plot=FALSE)$p.value
+model_compare$Ljung_Box_p[18] <- checkresiduals(S05_Var02_arima, plot=FALSE)$p.value
+model_compare$Ljung_Box_p[19] <- checkresiduals(S05_Var03_ets, plot=FALSE)$p.value
+model_compare$Ljung_Box_p[20] <- checkresiduals(S05_Var03_arima, plot=FALSE)$p.value
+model_compare$Ljung_Box_p[21] <- checkresiduals(S06_Var05_ets, plot=FALSE)$p.value
+model_compare$Ljung_Box_p[22] <- checkresiduals(S06_Var05_arima, plot=FALSE)$p.value
+model_compare$Ljung_Box_p[23] <- checkresiduals(S06_Var07_ets, plot=FALSE)$p.value
+model_compare$Ljung_Box_p[24] <- checkresiduals(S06_Var07_arima, plot=FALSE)$p.value
+
+model_compare
+
+
+
+# Prepare data to plot the MAPE.
+# Since Var02 has a number scale much larger than the other variables, we have to scale the RMSE for Var02 models by multiplying 1/20 so they can be plotted in the same graph.
+model_compare2 <- model_compare
+model_compare2$CV_MAPE <- ifelse(model_compare2$Variable=="Var02",
+                                 model_compare2$CV_MAPE/20,
+                                 model_compare2$CV_MAPE)
+model_compare2$Train_MAPE <- ifelse(model_compare2$Variable=="Var02",
+                                    model_compare2$Train_MAPE/20,
+                                    model_compare2$Train_MAPE)
+
+# Plot the training data MAPE. 
+ggplot(model_compare2, aes(x=paste0(Group, Variable), y=Train_MAPE, group=Model_Type)) +
+  geom_line(aes(linetype=Model_Type))+
+  geom_point(aes(shape=Model_Type))+
+  theme(axis.text.x = element_text(angle = 90))+
+  labs(title="MAPE of models",
+       caption = "MAPE for Var02 time series are scaled by 1/20") +
+  xlab("")
+
+# Plot the Cross-Validation MAPE. 
+ggplot(model_compare2, aes(x=paste0(Group, Variable), y=CV_MAPE, group=Model_Type)) +
+  geom_line(aes(linetype=Model_Type))+
+  geom_point(aes(shape=Model_Type))+
+  theme(axis.text.x = element_text(angle = 90))+
+  labs(title="MAPE of Cross-Validations",
+       caption = "MAPE for Var02 time series are scaled by 1/20") +
+  xlab("")
+
+# Plot the ljung-box test p-value
+ggplot(model_compare2, aes(x=paste0(Group, Variable), y=Ljung_Box_p, group=Model_Type)) +
+  geom_line(aes(linetype=Model_Type))+
+  geom_point(aes(shape=Model_Type))+
+  theme(axis.text.x = element_text(angle = 90))+
+  xlab("")
+# The RMSE for ETS and ARIMA models are very close, with the ARIMA models perform slightly better.
+# The the ljung-box test p-values, the ARIMA models are fitting to the data better so we will choose the ARIMA models for forecasting
+
+
+
+# Forcasting
+S01_Var01_forecast <- S01_Var01_arima %>% forecast(h=140)
+S01_Var02_forecast <- S01_Var02_arima %>% forecast(h=140)
+S02_Var02_forecast <- S02_Var02_arima %>% forecast(h=140)
+S02_Var03_forecast <- S02_Var03_arima %>% forecast(h=140)
+S03_Var05_forecast <- S03_Var05_arima %>% forecast(h=140)
+S03_Var07_forecast <- S03_Var07_arima %>% forecast(h=140)
+S04_Var01_forecast <- S04_Var01_arima %>% forecast(h=140)
+S04_Var02_forecast <- S04_Var02_arima %>% forecast(h=140)
+S05_Var02_forecast <- S05_Var02_arima %>% forecast(h=140)
+S05_Var03_forecast <- S05_Var03_arima %>% forecast(h=140)
+S06_Var05_forecast <- S06_Var05_arima %>% forecast(h=140)
+S06_Var07_forecast <- S06_Var07_arima %>% forecast(h=140)
+
+
+
+# Forecast Plot
+S01_Var01_forecast %>% autoplot()
+S01_Var02_forecast %>% autoplot()
+S02_Var02_forecast %>% autoplot()
+S02_Var03_forecast %>% autoplot()
+S03_Var05_forecast %>% autoplot()
+S03_Var07_forecast %>% autoplot()
+S04_Var01_forecast %>% autoplot()
+S04_Var02_forecast %>% autoplot()
+S05_Var02_forecast %>% autoplot()
+S05_Var03_forecast %>% autoplot()
+S06_Var05_forecast %>% autoplot()
+S06_Var07_forecast %>% autoplot()
+```

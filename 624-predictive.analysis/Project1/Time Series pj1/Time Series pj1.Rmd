@@ -1,0 +1,346 @@
+---
+title: "624: ETS vs ARIMA"
+author: "Jie Zou"
+date: "`r Sys.Date()`"
+output:
+  rmdformats::downcute:
+    self_contained: true
+    default_style: "light"
+    downcute_theme: "default"
+---
+
+```{r include=FALSE}
+library(dplyr)
+library(imputeTS)
+library(caret)
+library(corrplot)
+library(tidyr)
+library(forecast)
+```
+# Data Preprocessing
+  
+### Load data
+
+  the data only contains 7 variables, but there are 10572 records.
+  
+```{r echo=FALSE}
+data <- readxl::read_excel("../dataset.xls") %>% as.data.frame()
+str(data)
+```
+
+### Split data
+
+  As requests, the last 140 period needs to be reserved as true value, so that the forecasts accuracy can be computed. The actual length of our data is 9732.
+  
+  Based on summary report, there are several missing values except SeriesInd and category. The imputation action should be taken.
+```{r echo=FALSE}
+req.data <- data[1:(1622*6),]
+summary(req.data)
+```
+
+### Visualization before imputation
+
+#### distributions
+
+  from the plot of individual distribution of variable regardless of different categories, `Var02` is more problematic, which needs further investigation. But `Var01`, `Var03`, `Var05`, `Var07` have extreme outliers, therefore, we need to remove them first.
+  
+```{r echo=FALSE, warning=FALSE}
+req.data %>% 
+  gather(key, value, -category, -SeriesInd) %>% 
+  ggplot(aes(x = value)) +
+  geom_boxplot() +
+  facet_wrap(~key, scales = "free") +
+  theme_minimal() +
+  ggtitle("The distribution of variables")
+```
+```{r include=FALSE}
+# remove outliers
+req.data$Var01[which.max(req.data$Var01)] <- NA
+req.data$Var03[which.max(req.data$Var03)] <- NA
+req.data$Var05[which.max(req.data$Var05)] <- NA
+req.data$Var07[which.max(req.data$Var07)] <- NA
+```
+
+
+#### correlations
+  
+  except var02 has no relationship with others, the rest of variables are highly correlated. therefore, linear regression can help in impute missing values.
+  
+```{r echo=FALSE}
+req.data %>% 
+  select(-c(SeriesInd, category)) %>% 
+  cor(use = "na.or.complete") %>% 
+  corrplot(method = "number", order = "hclust", type = "lower", diag = FALSE)
+```
+
+### Imputation
+```{r}
+# use linear to impute missing value
+var01.imp <- req.data %>% select(Var01) %>% na_interpolation()
+var02.imp <- req.data %>% select(Var02) %>% na_interpolation()
+var03.imp <- req.data %>% select(Var03) %>% na_interpolation()
+var05.imp <- req.data %>% select(Var05) %>% na_interpolation()
+var07.imp <- req.data %>% select(Var07) %>% na_interpolation()
+
+# make a copy of imputed data
+req.data.cp <- req.data 
+req.data.cp <- req.data.cp
+req.data.cp["Var01"] <- var01.imp
+req.data.cp["Var02"] <- var02.imp
+req.data.cp["Var03"] <- var03.imp
+req.data.cp["Var05"] <- var05.imp
+req.data.cp["Var07"] <- var07.imp
+```
+
+#### split data by category with imputation
+
+  if we carefully observe the data, even through there are 10572 records on the data, each category contains 1762 records. and we save 140 period on the end, there should be 1622 records for each category with each variable.
+```{r echo=FALSE}
+# split data by category
+s01 <- req.data.cp %>% 
+  filter(category == "S01") %>% 
+  pivot_wider(id_cols = SeriesInd, names_from = category, values_from = c(Var01, Var02, Var03, Var05, Var07)) %>% 
+  select(c(SeriesInd,Var01_S01, Var02_S01))
+
+s02 <- req.data.cp %>% 
+  filter(category == "S02") %>% 
+  pivot_wider(id_cols = SeriesInd, names_from = category, values_from = c(Var01, Var02, Var03, Var05, Var07)) %>% 
+  select(c(Var02_S02, Var03_S02))
+
+s03 <- req.data.cp %>% 
+  filter(category == "S03") %>% 
+  pivot_wider(id_cols = SeriesInd, names_from = category, values_from = c(Var01, Var02, Var03, Var05, Var07)) %>% 
+  select(c(Var05_S03, Var07_S03))
+
+s04 <- req.data.cp %>% 
+  filter(category == "S04") %>% 
+  pivot_wider(id_cols = SeriesInd, names_from = category, values_from = c(Var01, Var02, Var03, Var05, Var07)) %>% 
+  select(c(Var01_S04, Var02_S04))
+
+s05 <- req.data.cp %>% 
+  filter(category == "S05") %>% 
+  pivot_wider(id_cols = SeriesInd, names_from = category, values_from = c(Var01, Var02, Var03, Var05, Var07)) %>% 
+  select(c(Var02_S05, Var03_S05))
+
+s06 <- req.data.cp %>% 
+  filter(category == "S06") %>% 
+  pivot_wider(id_cols = SeriesInd, names_from = category, values_from = c(Var01, Var02, Var03, Var05, Var07)) %>% 
+  select(c(Var05_S06, Var07_S06))
+
+# combine into one data frame
+df <- s01 %>% 
+  cbind(c(s02, s03, s04, s05, s06))
+
+str(df)
+```
+### Visualization after split and impute data
+
+  the plot below proves that `Var02` is problematic under different categories. And most of variables need somewhat transformation to make distribution turn normal.
+  
+```{r echo=FALSE}
+df %>% 
+  gather(key = "var",value = "val", -SeriesInd) %>% 
+  ggplot(aes(x = val)) + 
+  geom_boxplot() +
+  facet_wrap(~var, scales = "free") +
+  theme_minimal() +
+  ggtitle("distrubution by categories before transformation")
+```
+
+
+  the distribution looks much closer to normal.
+```{r echo=FALSE}
+# transform 
+df.trans <- df %>% preProcess("BoxCox")
+df.cp <- predict(df.trans, df)
+
+df.cp %>% 
+  gather(key = "var",value = "val", -SeriesInd) %>% 
+  ggplot(aes(x = val)) + 
+  geom_boxplot() +
+  facet_wrap(~var, scales = "free") +
+  theme_minimal() +
+  ggtitle("distrubution by category after transformation")
+```
+# Time series formation
+```{r echo=FALSE}
+# create time series
+var01_s01 <- ts(df.cp$Var01_S01, start = df$SeriesInd,frequency = 1)
+var02_s01 <- ts(df.cp$Var02_S01, start = df$SeriesInd,frequency = 1)
+var02_s02 <- ts(df.cp$Var02_S02, start = df$SeriesInd,frequency = 1)
+var03_s02 <- ts(df.cp$Var03_S02, start = df$SeriesInd,frequency = 1)
+var05_s03 <- ts(df.cp$Var05_S03, start = df$SeriesInd,frequency = 1)
+var07_s03 <- ts(df.cp$Var07_S03, start = df$SeriesInd,frequency = 1)
+var01_s04 <- ts(df.cp$Var01_S04, start = df$SeriesInd,frequency = 1)
+var02_s04 <- ts(df.cp$Var02_S04, start = df$SeriesInd,frequency = 1)
+var02_s05 <- ts(df.cp$Var02_S05, start = df$SeriesInd,frequency = 1)
+var03_s05 <- ts(df.cp$Var03_S05, start = df$SeriesInd,frequency = 1)
+var05_s06 <- ts(df.cp$Var05_S06, start = df$SeriesInd,frequency = 1)
+var07_s06 <- ts(df.cp$Var07_S06, start = df$SeriesInd,frequency = 1)
+```
+
+```{r echo=FALSE}
+# visualize time series
+var01_s01 %>% ggtsdisplay(main = "var01_s01")
+var02_s01 %>% ggtsdisplay(main = "var02_s01")
+var02_s02 %>% ggtsdisplay(main = "var02_s02")
+var03_s02 %>% ggtsdisplay(main = "var03_s02")
+var05_s03 %>% ggtsdisplay(main = "var05_s03")
+var07_s03 %>% ggtsdisplay(main = "var07_s03")
+var01_s04 %>% ggtsdisplay(main = "var01_s04")
+var02_s04 %>% ggtsdisplay(main = "var02_s04")
+var02_s05 %>% ggtsdisplay(main = "var02_s05")
+var03_s05 %>% ggtsdisplay(main = "var03_s05")
+var05_s06 %>% ggtsdisplay(main = "var05_s06")
+var07_s06 %>% ggtsdisplay(main = "var07_s06")
+```
+# Modeling
+```{r fig.height=5}
+# var01_s01
+var01_s01_ets <- ets(var01_s01)
+var01_s01_arima <- auto.arima(var02_s01, stepwise = FALSE, approximation = FALSE)
+
+# var02_s0
+var02_s01_ets <- ets(var02_s01)
+var02_s01_arima <- auto.arima(var02_s01, stepwise = FALSE, approximation = FALSE)
+
+# var02_s02
+var02_s02_ets <- ets(var02_s02)
+var02_s02_arima <- auto.arima(var02_s02, stepwise = FALSE, approximation = FALSE)
+
+# var03_s02
+var03_s02_ets <- ets(var03_s02)
+var03_s02_arima <- auto.arima(var03_s02, stepwise = FALSE, approximation = FALSE)
+
+# var05_s03
+var05_s03_ets <- ets(var05_s03)
+var05_s03_arima <- auto.arima(var05_s03, stepwise = FALSE, approximation = FALSE)
+
+# var07_s03
+var07_s03_ets <- ets(var07_s03)
+var07_s03_arima <- auto.arima(var07_s03, stepwise = FALSE, approximation = FALSE)
+
+# var01_s04
+var01_s04_ets <- ets(var01_s04)
+var01_s04_arima <- auto.arima(var01_s04, stepwise = FALSE, approximation = FALSE)
+
+# var02_s04
+var02_s04_ets <- ets(var02_s04)
+var02_s04_arima <- auto.arima(var02_s04, stepwise = FALSE, approximation = FALSE)
+
+# var02_s05
+var02_s05_ets <- ets(var02_s05)
+var02_s05_arima <- auto.arima(var02_s05, stepwise = FALSE, approximation = FALSE)
+
+# var03_s05
+var03_s05_ets <- ets(var03_s05)
+var03_s05_arima <- auto.arima(var03_s05, stepwise = FALSE, approximation = FALSE)
+
+# var05_s06
+var05_s06_ets <- ets(var05_s06)
+var05_s06_arima <- auto.arima(var05_s06, stepwise = FALSE, approximation = FALSE)
+
+# var07_s06
+var07_s06_ets <- ets(var07_s06)
+var07_s06_arima <- auto.arima(var07_s06, stepwise = FALSE, approximation = FALSE)
+
+```
+
+```{r echo=FALSE}
+# forecasts
+# arima
+pred.0101 <- var01_s01_arima %>% forecast(h=140)
+pred.0201 <- var02_s01_arima %>% forecast(h=140)
+pred.0202 <- var02_s02_arima %>% forecast(h=140)
+pred.0302 <- var03_s02_arima %>% forecast(h=140)
+pred.0503 <- var05_s03_arima %>% forecast(h=140)
+pred.0703 <- var07_s03_arima %>% forecast(h=140)
+pred.0104 <- var01_s04_arima %>% forecast(h=140)
+pred.0204 <- var02_s04_arima %>% forecast(h=140)
+pred.0205 <- var02_s05_arima %>% forecast(h=140)
+pred.0305 <- var03_s05_arima %>% forecast(h=140)
+pred.0506 <- var05_s06_arima %>% forecast(h=140)
+pred.0706 <- var07_s06_arima %>% forecast(h=140)
+
+# est
+pre.0101 <- var01_s01_ets %>% forecast(h=140)
+pre.0201 <- var02_s01_ets %>% forecast(h=140)
+pre.0202 <- var02_s02_ets %>% forecast(h=140)
+pre.0302 <- var03_s02_ets %>% forecast(h=140)
+pre.0503 <- var05_s03_ets %>% forecast(h=140)
+pre.0703 <- var07_s03_ets %>% forecast(h=140)
+pre.0104 <- var01_s04_ets %>% forecast(h=140)
+pre.0204 <- var02_s04_ets %>% forecast(h=140)
+pre.0205 <- var02_s05_ets %>% forecast(h=140)
+pre.0305 <- var03_s05_ets %>% forecast(h=140)
+pre.0506 <- var05_s06_ets %>% forecast(h=140)
+pre.0706 <- var07_s06_ets %>% forecast(h=140)
+```
+
+# Model comparison
+```{r echo=FALSE}
+model_compare <- data.frame(model_name = c("var01_s01",
+                          "var02_s01",
+                          "var02_s02",
+                          "var03_s02",
+                          "var05_s03",
+                          "var07_s03",
+                          "var01_s04",
+                          "var02_s04",
+                          "var02_s05",
+                          "var03_s05",
+                          "var05_s06",
+                          "var07_s06"),
+           ETS_mape = c(round(accuracy(var01_s01_ets)[,5], 4),
+                        round(accuracy(var02_s01_ets)[,5], 4),
+                        round(accuracy(var02_s02_ets)[,5], 4),
+                        round(accuracy(var03_s02_ets)[,5], 4),
+                        round(accuracy(var05_s03_ets)[,5], 4),
+                        round(accuracy(var07_s03_ets)[,5], 4),
+                        round(accuracy(var01_s04_ets)[,5], 4),
+                        round(accuracy(var02_s04_ets)[,5], 4),
+                        round(accuracy(var02_s05_ets)[,5], 4),
+                        round(accuracy(var03_s05_ets)[,5], 4),
+                        round(accuracy(var05_s06_ets)[,5], 4),
+                        round(accuracy(var07_s06_ets)[,5], 4)),
+           ARIMA_mape = c(round(accuracy(var01_s01_arima)[,5], 4),
+                          round(accuracy(var02_s01_arima)[,5], 4),
+                          round(accuracy(var02_s02_arima)[,5], 4),
+                          round(accuracy(var03_s02_arima)[,5], 4),
+                          round(accuracy(var05_s03_arima)[,5], 4),
+                          round(accuracy(var07_s03_arima)[,5], 4),
+                          round(accuracy(var01_s04_arima)[,5], 4),
+                          round(accuracy(var02_s04_arima)[,5], 4),
+                          round(accuracy(var02_s05_arima)[,5], 4),
+                          round(accuracy(var03_s05_arima)[,5], 4),
+                          round(accuracy(var05_s06_arima)[,5], 4),
+                          round(accuracy(var07_s06_arima)[,5], 4)),
+           ETS_p = c(round((pre.0101 %>% checkresiduals(plot = FALSE))$p.value, 4),
+                     round((pre.0201 %>% checkresiduals(plot = FALSE))$p.value, 4),
+                     round((pre.0202 %>% checkresiduals(plot = FALSE))$p.value, 4),
+                     round((pre.0302 %>% checkresiduals(plot = FALSE))$p.value, 4),
+                     round((pre.0503 %>% checkresiduals(plot = FALSE))$p.value, 4),
+                     round((pre.0703 %>% checkresiduals(plot = FALSE))$p.value, 4),
+                     round((pre.0104 %>% checkresiduals(plot = FALSE))$p.value, 4),
+                     round((pre.0204 %>% checkresiduals(plot = FALSE))$p.value, 4),
+                     round((pre.0205 %>% checkresiduals(plot = FALSE))$p.value, 4),
+                     round((pre.0305 %>% checkresiduals(plot = FALSE))$p.value, 4),
+                     round((pre.0506 %>% checkresiduals(plot = FALSE))$p.value, 4),
+                     round((pre.0706 %>% checkresiduals(plot = FALSE))$p.value, 4)),
+           ARIMA_p = c(round((pred.0101 %>% checkresiduals(plot = FALSE))$p.value,4),
+                     round((pred.0201 %>% checkresiduals(plot = FALSE))$p.value,4),
+                     round((pred.0202 %>% checkresiduals(plot = FALSE))$p.value,4),
+                     round((pred.0302 %>% checkresiduals(plot = FALSE))$p.value,4),
+                     round((pred.0503 %>% checkresiduals(plot = FALSE))$p.value,4),
+                     round((pred.0703 %>% checkresiduals(plot = FALSE))$p.value,4),
+                     round((pred.0104 %>% checkresiduals(plot = FALSE))$p.value,4),
+                     round((pred.0204 %>% checkresiduals(plot = FALSE))$p.value,4),
+                     round((pred.0205 %>% checkresiduals(plot = FALSE))$p.value,4),
+                     round((pred.0305 %>% checkresiduals(plot = FALSE))$p.value,4),
+                     round((pred.0506 %>% checkresiduals(plot = FALSE))$p.value,4),
+                     round((pred.0706 %>% checkresiduals(plot = FALSE))$p.value,4))
+           )
+
+model_compare
+```
+
