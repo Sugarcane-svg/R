@@ -4,8 +4,9 @@ The first half part of the course is focus on time series
 
   1. trend, seasonal, cyclic
   2. time series decomposition(better visualize trend and seasonal)
-  3. time series smoothing(moving average)
-  4. time series modeling(ARIMA, ETS)
+  3. seasonal diagnose plot
+  4. time series smoothing(moving average)
+  5. time series modeling(ARIMA, ETS)
 
 
 the second part of the course is focus on varies regression models and its performance, I am going to break them into three parts, the params are the parameters which need to be tuned to get optimal model.
