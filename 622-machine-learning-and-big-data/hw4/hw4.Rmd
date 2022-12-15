@@ -1,0 +1,282 @@
+---
+title: "622: hw4_final"
+author: "Jie Zou"
+date: "`r Sys.Date()`"
+output:
+  rmdformats::downcute:
+    self_contained: true
+    default_style: "light"
+    downcute_theme: "default"
+---
+
+# Objectives
+  
+  In the final project, I am going to try to do email classification. The dataset is coming from [Kaggle](https://www.kaggle.com/datasets/balaka18/email-spam-classification-dataset-csv). The technologies for classification that I will used according to the requirement are SVM, XGBoost and NN.
+  
+  The data has been pre-processed a little which means that the non alphabet letters/words have been excluded from the data, as well as that the text has been stored as features, and rows are the frequency of the corresponding words. Therefore, the dataset only contains three parts: name of email, extracted text and target variable.
+```{r setup, include=FALSE, message=FALSE}
+library(ggplot2) 
+library(readr)
+library(dplyr)
+library(factoextra) # feature extraction
+library(caret) 
+library(xgboost) # xgboost
+library(wordcloud) # plot words
+library(tm) # text sentiment 
+library(purrr) # functions
+library(tidyverse)
+library(stringr) # string manipulation
+library(e1071) # SVM
+library(neuralnet) # NN
+```
+
+# Read Data
+
+  As we see from the first input, the dataset contains 5172 rows and 3002 features, so that there are 3000 words extracted from 5172 emails. Since the records only contains the frequencies, and it contains too many features which exceed the print limit in R, I did not show the summary of the data set, but the top few rows are showing just to see how the table will be like. In addition, there is no missing values found on the data.
+```{r}
+data <- read.csv("emails.csv")
+
+# dimension of current data
+dim(data)
+
+# consist with email_name, words, and predictor
+head(data)
+
+# make a copy of original data
+data.cp <- data
+```
+```{r}
+# check the missing value
+data.cp %>% is.na() %>% sum()
+```
+# Basic Cleaning
+
+  As we see from the table above, the first column does not seem to provide any useful information for either analysis or model learning, so it is dropped from the table. Since all features are lower case words and only the name of target variable is capital in initial, it might be confuse when only of feature names is the same as target variable, therefore, I change the name of target variable into `target_class`, also convert it into factor type.
+  
+  Secondly, if we pay more attention on the name of features, there is `.` comes with words. As a result, I remove all dots and spaces(in case there is spaces as well) from column names. Meanwhile, the small table shows that target class is imbalanced class. It is normal in email classification because spam email is always less than non-spam email.
+```{r}
+# email name is not informative
+data.cp <- 
+  data.cp %>% 
+  select(-c(Email.No.))
+
+# convert target class into factor
+data.cp$Prediction <- data.cp %>% 
+  select(Prediction) %>%
+  unlist %>% 
+  as.factor()
+
+# rename the target variable
+data.cp <- data.cp %>% 
+  rename(target_class = Prediction) %>% 
+  rename_all(~gsub("\\s+|\\.", "", .))
+  
+# check if target class is imbalanced
+table(data.cp$target_class)
+```
+
+# Visualization
+
+  The plot shows the top 500 words with the most frequency. The larger text, the more frequently appear in an email, and the bolder, the more frequent.
+  
+```{r}
+# show word cloud
+words <- 
+  data.cp %>% 
+  select(-c(target_class)) %>% 
+  gather("key", "value") %>% 
+  group_by(key) %>% 
+  summarize(n = sum(value))
+
+wordcloud(words = words$key, freq = words$n, max.words = 500, min.freq = 100)
+```
+  
+# Curse of Dimension 
+
+### Sentiment
+
+  I figure that there are some single letters appears so many time, it could be some non-alphabet letters with them before. A single letter does not sound like a pretty good predictor, besides, there are too many features in the dataset, it will increase the computational complexity. So, first of all, remove single lower case letters, stopwords, extra spaces caused by removing and near zero variables. Then create a new subset of data based on the cleaned text, which reduce the dimension from 3000+ features to 300+. Note: I did not convert text into its root form, because I tried multiple times, the function will break some words, for example, `ability` -> `abil` which makes no sense.
+```{r}
+# sentiment in column names
+plain_words <- 
+  words$key %>% 
+  unlist() %>% 
+  paste(collapse = ' ') %>%
+  removePunctuation() %>% 
+  removeWords(letters) %>% 
+  removeWords(stopwords()) %>% 
+  str_squish()
+
+# remove extra space
+plain_words <- 
+  str_split(plain_words, "\\s+") %>% 
+  unlist()
+
+
+# create subset based on cleaned text                      
+dd <- data.cp %>% 
+  select(c(plain_words, target_class))
+
+d <- dd[, -nearZeroVar(dd)]
+
+dim(d)
+```
+
+
+### PCA
+
+  Even though the dimension has been tremendous decreased, I would like to see if PCA can help do some feature extraction so that there is still a chance to reduce a little more uninformative features.
+  
+  From summary of PCA, PC70 is the limit of eigenvalue to be 1 and achieve 74.6% accumulative proportion of variance. That is already not bad. But from contribution plot, it is very hard to pick out individual features. So, I am going to leave 300+ feature as they are.
+  
+```{r}
+# run PCA
+d.pca <- 
+  d %>% 
+  select(-c(target_class)) %>% 
+  prcomp(center = T, scale. = T)
+
+summary(d.pca)
+```
+```{r}
+# contribution plot
+fviz_contrib(d.pca, choice = "var", sort.val = "desc", axes = 1:70)
+```
+
+### Correlation
+
+  as I left texts as they are, different tense of a words are metaphors of their root. So human will diagnose them the same, but to machine, it is two different words. From intuition, a word with its metaphor should have strong relationship in appearance. Therefore, I can reduce dimension by removing those highly correlated words as well. Now it has less than 300 features. Until now, I could not think of other methods to reduce the dimension on the top of my head, so let's stay with it then.
+```{r}
+# remove high correlation pair
+tooHigh <- findCorrelation(cor(subset(d, select = -c(target_class))), cutoff = 0.8)
+
+d <- d[, -tooHigh]
+dim(d)
+```
+
+# Data Preparation
+
+### Preprocessing
+
+  standardize data point to decrease intense computation.
+```{r}
+# preprocess: center + scale
+set.seed(100)
+preproc <- preProcess(subset(d, select = -c(target_class)), method = c("center", "scale"))
+d.preproc <- predict(preproc, d)
+head(d.preproc)
+```
+### Spliting
+
+  split data by 7:3, so 70% to training, 30% to test set. Therefore, training has 3621 records and 283 features. Now we still face on imbalanced class issue. I am going to use up-Sampling technique to get more sample in training and counter imbalance problem. (Deep down, I am not sure if decreasing features is a good idea because email classification is based on the analysis of email content, which is based on words. That is why I use up-Sampling to get more sample, at least it will potentially increase some accuracy)
+```{r}
+# split data based on the ratio of target class
+set.seed(101)
+splt <- createDataPartition(y = d.preproc$target_class, p = 0.7, list = F)
+
+# create training and test set
+train <- d.preproc[splt,]
+test <- d.preproc[-splt,]
+
+# dimension check
+dim(train)
+# imbalance class check
+table(train$target_class)
+
+# up sample training set
+# set.seed(101)
+train.up <- upSample(x = train[,-ncol(train)], y = train$target_class, yname = "CLASS", list = F)
+dim(train.up)
+table(train.up$CLASS)
+
+# split target label from both training and test set
+train.x <- train.up %>% subset(select = -c(CLASS))
+train.y <- train.up %>% subset(select = c(CLASS)) %>% unlist()
+test.x <- test %>% select(-c(target_class))
+test.y <- test %>% select(c(target_class)) %>% unlist()
+```
+# Modeling
+
+  * SVM
+  * XGBoost
+  * Neural Network
+
+### SVM
+```{r}
+set.seed(124)
+# svm
+svm.model <- svm(x = train.x, y = train.y)
+summary(svm.model)
+```
+
+### XGBoost
+
+  I'd run xgb directly, but instead of 10 iterations, I ran 30-50 iteration with the same parameters, the training accuracy was close to 0.98. However, I was skeptical about over-fitting. Therefore, I use cross validation technique to verify, it turns out that 10 iterations achieve roughly 98% accuracy and the accuracy of test set is roughly the same. So 10 iteration does not cause over-fitting.
+```{r}
+set.seed(126)
+#xgb
+xgb_cv <- xgb.cv(data = as.matrix(train.x), label = as.matrix(train.y), nrounds = 10, nthread = 2, nfold = 10, metrics = list("rmse","auc"), max_depth = 3, eta = 0.3, objective = "binary:logistic")
+
+xgb <- xgboost(data = as.matrix(train.x), label = as.matrix(train.y), nrounds = 10, nthread = 2, max_depth = 3, eta = 0.3, objective = "binary:logistic")
+```
+### Neural Network
+  
+  For NN, there is going to be 2 neurons, and train 1 times. It took me too long to compute 10 time, so I decide to keep it as default. (Note: you don't want to see the output of nn in detail because it involves everything shown below, and R will print a whole page or two to show)
+  
+```{r}
+set.seed(125)
+# NN
+nn <- neuralnet(CLASS ~ . , data = data.frame(train.up), hidden = 2)
+
+plot(nn)
+```
+# Performance
+
+  * SVM
+  * XGBoost
+  * Neural Network
+  
+### SVM
+```{r}
+svm.pred <- predict(svm.model, test.x)
+svm.table <- confusionMatrix(test.y, svm.pred)
+svm.table
+```
+### XBGoost
+
+```{r}
+# xgb calculates probability
+xgb.pred <- predict(xgb, as.matrix(test.x))
+xgb.pred.trans <- as.numeric(xgb.pred > 0.5) %>% as.factor() # convert probability to class
+xgb.table <- confusionMatrix(test.y, xgb.pred.trans)
+xgb.table
+```
+### NN
+```{r}
+# nn calculate probability
+nn.pred <- predict(nn, test.x) # return data frame
+nn.pred.trans <- as.numeric(nn.pred[,2] > 0.5) %>% as.factor() # convert probability to class
+nn.table <- confusionMatrix(test.y, nn.pred.trans)
+nn.table
+```
+# Conclusion
+
+  Based on the table shown below, it looks like Neural Network works best, and XGBoost works the worst. that is not what I expected. I thought that these three modeling techniques should perform similarly because they are powerful than others. If ordering is required between the three, me personally would do NN > XGBoost > SVM.
+```{r echo=FALSE}
+df <- data.frame()
+df <- df %>%
+  rbind(
+    c("SVM", round(svm.table$overall[1],4), round(svm.table$byClass[1],4), round(svm.table$byClass[2],4),
+      round(svm.table$byClass[5],4), round(svm.table$byClass[6],4)),
+    c("XGBoost", round(xgb.table$overall[1],4), round(xgb.table$byClass[1],4), round(xgb.table$byClass[2],4),
+      round(xgb.table$byClass[5],4), round(xgb.table$byClass[6],4)),
+    c("NN", round(nn.table$overall[1],4), round(nn.table$byClass[1],4), 
+      round(nn.table$byClass[2],4), round(nn.table$byClass[5],4), round(nn.table$byClass[6],4)))
+colnames(df) <- c("model", "accuracy", "sensitivity", "specificity","precision", "recall")
+
+df
+```
+
+# Concern
+
+  Like I mention before, spam email classification is based on the content of email. Analyzing sentence and words to judge if an email is spam or not. So that, does it mean the more sentence, the better spam detection? if so, do you think my dimension reduction here is necessary? if not, how are you going to do analysis and modeling with 3000+ features?
