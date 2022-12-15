@@ -1,0 +1,233 @@
+---
+title: ""
+date: "`r Sys.Date()`"
+output:
+  rmdformats::downcute:
+    self_contained: true
+    default_style: "light"
+    downcute_theme: "default"
+---
+
+
+```{r setup, include=FALSE, message=FALSE}
+library(dplyr)
+library(tidyverse)
+library(purrr)
+library(corrplot)
+library(rpart)
+library(caret)
+library(rsample)
+library(randomForest)
+```
+# About Data
+### Data Description
+  The data is obtained from [Kaggle](https://www.kaggle.com/datasets/gauravtopre/bank-customer-churn-dataset). Following will be the description of each feature.
+  
+    1. customer_id: account number.
+    2. credit_score: credit score.
+    3. country: country of residence.
+    4. gender: gender.
+    5. age: age.
+    6. tenure: from how many years the card holder hold the account.
+    7. balance: account balance.
+    8. products_number: number of product from bank.
+    9. credit_card: does account holder have associated credit card.
+    10. active_member: is account holder an active member.
+    11. estimated_salary: salary of account holder.
+    12. churn: churn status.
+    
+  Obviously, `customer_id` is for identification purpose and it will not provide any useful information for further investigation, I am going to drop the column. Also, there are some features indicates "on/off" characteristic, I am going to change their data type into factors.
+```{r echo=FALSE}
+data <- read_csv("Bank_Customer_Churn_Prediction.csv", show_col_types = FALSE)
+```
+
+```{r echo=FALSE}
+data <- 
+  data %>% 
+  select(-c(customer_id)) %>% 
+  mutate(country = as.factor(country),
+         gender = as.factor(gender),
+         credit_card = as.factor(credit_card),
+         active_member = as.factor(active_member),
+         churn = as.factor(churn))
+
+data %>% 
+  glimpse()
+```
+### Summary Statistics 
+
+  There is no missing value in the data, about 20% customer churn eventually, and 80% customer remain on the bank.
+```{r echo=FALSE}
+summary(data)
+```
+
+# Visualization
+
+  In order to efficiently map features into target variable, we need to visualize the data to get more information or have some intuition.
+  
+### Numerical vs Target
+
+  `age`: it seems mid-age is more likely to churn
+  
+  `balance` and `credit_score` do not seem to provide a lot useful information
+  
+  `estimated_salary`: it seems estimated salary is less than 125,000 is less likely to churn where as estimated salary more than 125,000 is more likely to churn
+  
+  `product_number`: the more product used by customer, the less likely churn
+  
+  `tenure`: the longer a customer stays, the less likely churn
+  
+```{r echo=FALSE}
+data %>% 
+  keep(is.numeric) %>% 
+  cbind(churn = data$churn) %>% 
+  gather("variable", "value", -churn) %>% 
+  ggplot(aes(x = value, color = churn)) + 
+    geom_density() + 
+    facet_wrap(~variable, scales = "free") + 
+    theme_classic() +
+    labs(x = "Numeric Variables",
+         y = "",
+         title = "Distribution of Numeric Variables by Churn Status")
+```
+### Correlations
+  
+  No strong correlation between numeric variables, which is a good sign
+```{r echo=FALSE}
+data %>% 
+  keep(is.numeric) %>% 
+  cor() %>% 
+  corrplot(method = "number", type = "lower")
+```
+### Categorical vs Target
+  
+  To see the relationship between these categorical variable and target variable, I need to take a look at the both graph shown below. And I found:
+  
+  `active_member`: active member is more than inactive member, and inactive member is more likely to churn
+  
+  `country`: France has more users than other two countries, however the proportion of churn status in both France and Spain is roughly the same. Therefore, the first common churning country is German, then it would be Spain, France is the least likely to churn.
+  
+  `credit_card`: There are more customers have associated credit card but the proportion of churn status between customers who have credit card and who don't have one is similar, which I would say that the customers who don't have associated credit card are more likely to churn.
+  
+  `gender`: female customers is likely to churn compared to male ones.
+  
+```{r warning=FALSE, echo=FALSE}
+grid1 <- data %>% 
+  keep(is.factor) %>% 
+  gather("variable", "value", -churn) %>% 
+  ggplot(aes(x = value, fill = churn)) + 
+    geom_bar(position = "fill") + 
+    scale_y_continuous(labels = scales::percent) + 
+    facet_wrap(~variable, scales = "free") + 
+    theme_classic() +
+    labs(x = "variables",
+         y = "percentage",
+         title = "Churn Proportions")
+
+grid2 <- data %>% 
+  keep(is.factor) %>% 
+  gather("variable", "value", -churn) %>% 
+  ggplot(aes(x = value, fill = churn)) + 
+    geom_bar(position = "dodge") + 
+    facet_wrap(~variable, scales = "free") + 
+    theme_classic() +
+    labs(x = "variables",
+         y = "",
+         title = "Churn Status Distribution Across Categories")
+
+gridExtra::grid.arrange(grid1, grid2, ncol = 2)
+```
+# Preprocessing
+
+### One-Hot Encoding
+```{r echo=FALSE}
+data.cp <- dummyVars(~country + gender, data = data)
+data <- data %>% 
+  cbind(predict(data.cp, data[2:3])) %>% 
+  select(-c(country, gender))
+preproc <- preProcess(data, method = c("center", "scale"))
+data <- predict(preproc, data)
+```
+### Data Split
+```{r echo=FALSE}
+set.seed(100)
+
+splits <- initial_split(data)
+train.X <- training(splits)
+train.up <- upSample(x=train.X[,- 9], train.X$churn) # upsampling
+#table(train.up$Class)
+test.X <- testing(splits) %>% select(-c(churn))
+test.Y <- testing(splits) %>% select(churn) %>% unlist()
+```
+
+
+# Modeling
+
+### First Decision Tree
+
+  I am going to use all variable to see how the decision tree works.
+  As the tree structure shown, variable `credit_card`, `credit_score` and `estimated_salary` do not used in the prediction. Double check the importance of variables determined by the tree, this tree model only uses the first five variable to train the data, and the accuracy of the prediction outcome is 85.4%.
+  
+```{r echo=FALSE}
+tree1 <- rpart(Class ~ ., data = train.up)
+rpart.plot::rpart.plot(tree1)
+varImp(tree1) %>% arrange(desc(Overall))
+```
+```{r echo=FALSE}
+# prediction for simple decision tree
+tree1.pred <- predict(tree1, test.X, type = "class")
+tree1.table <- confusionMatrix(tree1.pred, test.Y)
+```
+
+### Second Decision Tree
+
+  In the second tree, I pick the most important variable based on my intuition. The tree structure looks different from the first tree.
+
+```{r echo=FALSE}
+tree2 <- rpart(Class ~ products_number + tenure + age + balance, data = train.up)
+#plot(tree2)
+rpart.plot::rpart.plot(tree2)
+```
+
+```{r echo=FALSE}
+tree2.pred <- predict(tree2, test.X, type = "class")
+tree2.table <- confusionMatrix(tree2.pred, test.Y)
+```
+
+### Random Forest
+
+  The last model is random forest. I expected the accuracy for the ensemble model would be higher than the simple decision tree, however, the accuracy of the predictive outcome is approximately the same as the first decision tree. 
+
+```{r echo=FALSE}
+tree3 <- randomForest(Class ~ ., data = train.up)
+tree3
+plot(tree3)
+```
+```{r echo=FALSE}
+tree3.pred <- predict(tree3, test.X, type = "class")
+tree3.table <- confusionMatrix(tree3.pred, test.Y)
+```
+# Model Comparison
+
+  tree1: first decision tree
+  
+  tree2: second decision tree
+  
+  tree3: random forest
+```{r echo=FALSE}
+df <- data.frame()
+df <- df %>%
+  rbind(
+    c("tree1", tree1.table$overall[1], round(tree1.table$byClass[1],4), round(tree1.table$byClass[2],4),
+      round(tree1.table$byClass[5],4), round(tree1.table$byClass[6],4)),
+    c("tree2", tree2.table$overall[1], round(tree2.table$byClass[1],4), round(tree2.table$byClass[2],4),
+      round(tree2.table$byClass[5],4), round(tree2.table$byClass[6],4)),
+    c("tree3", tree3.table$overall[1], round(tree3.table$byClass[1],4), 
+      round(tree3.table$byClass[2],4), round(tree3.table$byClass[5],4), round(tree1.table$byClass[6],4)))
+colnames(df) <- c("model", "accuracy", "sensitivity", "specificity","precision", "recall")
+
+df
+```
+# Conclusion
+
+  I did twice of this homework, the first time that I did, I forget the point that imbalanced class will cause unstable tree model. After reviewing the code, I realize the problem, and add upsampling after spliting data, which makes sure that the target class is well balanced in the training set. Then, model performance is just like what I expected which Random forest performs the best. I think the futher step needs to be taken is to tune the parameters for these tree models and see where the optimal values are. 
