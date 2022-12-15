@@ -1,0 +1,477 @@
+---
+title: "622: hw1"
+author: "Jie Zou"
+date: "`r Sys.Date()`"
+output:
+  rmdformats::downcute:
+    self_contained: true
+    default_style: "light"
+    downcute_theme: "default"
+---
+
+```{r message=FALSE, warning=FALSE, include=FALSE}
+library(readr)  # read file
+library(dplyr)  
+library(purrr)  
+library(ggplot2)
+library(tidyverse)
+library(corrplot) # correlation plot
+library(forecast) # time series
+library(caret)
+library(MASS)
+library(rpart)  # simple tree regression
+library(rsample)  # data split
+library(ipred)  # bagging
+```
+
+```{r include=FALSE}
+small <- read.csv("~/Downloads/1000 Sales Records.csv")
+large <- read.csv("~/Downloads/100000 Sales Records.csv")
+```
+
+# Data Summary
+
+#### Summary in general
+
+-   The dimension of small data set is (1000, 14)
+
+-   The dimension of large data set is (100000, 14)
+
+-   Among these features, 7 of them are categorical and the rest is numerical(integer + double)
+
+```{r echo=FALSE}
+glimpse(small)
+glimpse(large)
+```
+
+#### Statistical Summary
+
+-   There is no obvious missing data in both data sets
+
+```{r echo=FALSE}
+summary(small)
+```
+
+```{r echo=FALSE}
+summary(large)
+```
+
+# Visualization
+
+#### Numeric: Distribution
+
+-   `Total.Cost` and `Total.Profit` and `Total.Revenue` in both data set have similar trend, which indicates that these three variables are correlated
+
+-   `Unit.Cost` and `Unit.Price` in large data set have more peaks than in the small data set
+
+-   `Unit.Sold` in large data set look much more stable than in small data set
+
+```{r echo=FALSE}
+small %>% 
+  dplyr::select(-c(Order.ID)) %>% 
+  discard(is.character) %>% 
+  gather(key = "var", value = "val") %>% 
+  ggplot(aes(x = val)) +
+  geom_density() + 
+  facet_wrap(~ var, scales = "free") +
+  theme_classic() +
+  xlab("numeric variable") +
+  ylab("") +
+  ggtitle("distribution of numeric variables in 1,000 records")
+
+large %>%
+  dplyr::select(-c(Order.ID)) %>% 
+  discard(is.character) %>%  
+  gather(key = "var", value = "val") %>% 
+  ggplot(aes(x = val)) +
+  geom_density() + 
+  facet_wrap(~ var, scales = "free") +
+  theme_classic() +
+  xlab("numeric variable") +
+  ylab("") +
+  ggtitle("distribution of numeric variables in 100,000 records")
+```
+
+#### Numeric: Outliers
+
+-   Except `Unit.Sold`, the rest of numerical variables in large data either shift to right or expend the 3rd Quantile
+
+-   `Unit.Sold` in small data set is slightly skewed, however in the large data, it is symmetric.
+
+-   Both data set does not show extreme outliers
+
+```{r echo=FALSE}
+small %>%
+  dplyr::select(-c(Order.ID)) %>% 
+  discard(is.character) %>%  
+  gather(key = "var", value = "val") %>% 
+  ggplot(aes(x = val)) +
+  geom_boxplot() + 
+  facet_wrap(~ var, scales = "free") +
+  theme_classic() +
+  xlab("numeric variable") +
+  ylab("") +
+  ggtitle("distribution of numeric variables in 1,000 records")
+
+large %>%
+  dplyr::select(-c(Order.ID)) %>% 
+  discard(is.character) %>%  
+  gather(key = "var", value = "val") %>% 
+  ggplot(aes(x = val)) +
+  geom_boxplot() + 
+  facet_wrap(~ var, scales = "free") +
+  theme_classic() +
+  xlab("numeric variable") +
+  ylab("") +
+  ggtitle("distribution of numeric variables in 100,000 records")
+```
+
+#### Numeric: Correlation
+
+-   `Total.Revenue`, `Total.Cost` and `Total.Profit` are highly correlated as aforementioned, large data in the second graph show slightly higher correlation between `Unit.Cost` and `Total.Revenue`and/or `Total.Cost` and/or `Total.Profit`, `Unit.Price` and `Total Revenue` and/or `Total.Profit` and/or `Total.Cost`
+
+-   `Unit.Price` and `Unit.Cost` are also highly correlated
+
+```{r echo=FALSE}
+small %>% 
+  dplyr::select(-c(Order.ID)) %>% 
+  discard(is.character) %>% 
+  cor() %>% 
+  corrplot(method = "number", type = "lower")
+
+large %>% 
+  dplyr::select(-c(Order.ID)) %>% 
+  discard(is.character) %>% 
+  cor() %>% 
+  corrplot(method = "number", type = "lower")
+```
+
+#### Numeric: Correlation Cont.
+
+-   After dropping those highly correlated pairs, the correlation for the rest of values is shown below.
+
+-   For some of values, correlation in large data set is still slightly higher than ones in small data set, but it does not go beyond the limit which I set to 0.8
+
+```{r echo=FALSE}
+highCorrelated <- 
+  small %>% 
+  dplyr::select(-c(Order.ID)) %>% 
+  discard(is.character) %>% 
+  cor() %>% 
+  findCorrelation(cutoff = 0.8, names = TRUE)
+
+small_pure <- 
+  small %>% 
+  dplyr::select(-c(highCorrelated, Order.ID, Order.Date, Ship.Date, Country)) %>% 
+  mutate(Region = as.factor(Region),
+         Item.Type = as.factor(Item.Type),
+         Sales.Channel = as.factor(Sales.Channel),
+         Order.Priority = as.factor(Order.Priority))
+
+large_pure <- 
+  large %>% 
+  dplyr::select(-c(highCorrelated, Order.ID, Order.Date, Ship.Date, Country)) %>% 
+  mutate(Region = as.factor(Region),
+         Item.Type = as.factor(Item.Type),
+         Sales.Channel = as.factor(Sales.Channel),
+         Order.Priority = as.factor(Order.Priority))
+
+small_pure %>% 
+  discard(is.factor) %>% 
+  cor() %>% 
+  corrplot(method = "number", type = "lower")
+
+large_pure %>% 
+  discard(is.factor) %>% 
+  cor() %>% 
+  corrplot(method = "number", type = "lower")
+
+```
+
+#### Categorical: Distribution in General
+
+-   based on the general distribution, I see that there are lots of distinct value in variable `Country`, `Order.Date` and `Ship.Date`, I do not think these variable will be a good predictor for later modeling. Therefore, these variables are dropped as well.
+
+```{r echo=FALSE}
+small %>% 
+  keep(is.character) %>% 
+  gather(key = "var", value = "val") %>% 
+  ggplot(aes(x = val)) +
+    geom_bar() +
+    facet_wrap(~var, scales = "free") +
+    ggtitle("Categorical Distribution for 1,000 records") +
+    theme_classic()
+
+large %>% 
+  keep(is.character) %>% 
+  gather(key = "var", value = "val") %>% 
+  ggplot(aes(x = val)) +
+    geom_bar() +
+    facet_wrap(~var, scales = "free") +
+    ggtitle("Categorical Distribution for 100,000 records") +
+    theme_classic()
+```
+
+#### Categorical: Refined Distribution
+
+-   name of the rest categorical variables and its corresponding distribution are shown below.
+
+```{r echo=FALSE}
+small_pure %>% 
+  keep(is.factor) %>% 
+  names()
+```
+
+```{r echo=FALSE, warning=FALSE}
+small_pure %>% 
+  keep(is.factor) %>% 
+  gather(key = "var", value = "val") %>% 
+  ggplot(aes(x = val)) + 
+    geom_bar() +
+    facet_wrap(~var, scales = "free") + 
+    theme_classic() +
+    theme(axis.text.x = element_text(angle = 90)) +
+    ggtitle("distribution of categorical variable for 1,000 records") +
+    xlab("categorical variable")
+
+large_pure %>% 
+  keep(is.factor) %>% 
+  gather(key = "var", value = "val") %>% 
+  ggplot(aes(x = val)) + 
+    geom_bar() +
+    facet_wrap(~var, scales = "free") + 
+    theme_classic() +
+    theme(axis.text.x = element_text(angle = 90)) +
+    ggtitle("distribution of categorical variable for 100,000 records") +
+    xlab("categorical variable")
+```
+
+#### Categorical: Relational Distribution
+
+-   use selected categorical variable to see the relationship between them and target variable `Total.Profit`
+
+```{r echo=FALSE}
+region <- ggplot(small_pure, aes(Total.Profit, color = Region)) +
+    geom_density() +
+    theme_classic() +
+    ggtitle("Distribution of Total Profit on Region")
+
+itemType <- ggplot(small_pure, aes(Total.Profit, color = Item.Type)) +
+    geom_density() +
+    theme_classic() +
+    ggtitle("Distribution of Total Profit on Item.Type")
+
+salesChannel <- ggplot(small_pure, aes(Total.Profit, color = Sales.Channel)) +
+    geom_density() +
+    theme_classic() +
+    ggtitle("Distribution of Total Profit on Sales.Channel")
+
+orderPriority <- ggplot(small_pure, aes(Total.Profit, color = Order.Priority)) +
+    geom_density() +
+    theme_classic() +
+    ggtitle("Distribution of Total Profit on Order.Priority")
+
+
+gridExtra::grid.arrange(region, itemType, salesChannel, orderPriority, ncol = 2)
+```
+
+#### Time Series: Target `Total.Profit`
+
+-   the first plot is the time series for small data set, there is seasonality shown, but the trend looks downward(not clear for a long run)
+
+-   the second plot is the time series for large data set, seasonality is shown as well, but different from small data. The trend looks upward(not clear for a long run)
+
+```{r echo=FALSE}
+small_pure %>% 
+  dplyr::select(Total.Profit) %>% 
+  ts(start = 2010, end = 2018, frequency = 12) %>% 
+  decompose() %>% 
+  plot()
+
+large_pure %>% 
+  dplyr::select(Total.Profit) %>% 
+  ts(start = 2010, end = 2018, frequency = 12) %>% 
+  decompose() %>% 
+  plot()
+```
+
+# Pre-processing
+
+#### 1. Drop columns
+
+Based on the **Categorical: Relational Distribution**, I see that `Sales.Channel`, `Order.Priority` and `Region` don't make much different in its individual internal value across target variable, which means that the line trend follows similar pattern except `Item.Type`. Therefore, I think that these variables will not provide significant information in future modeling.
+
+```{r echo=FALSE}
+# drop columns has nothing to do with modeling: channel, priority and region
+small_pure <- small_pure[, -c(1,3,4)]
+large_pure <- large_pure[, -c(1,3,4)]
+head(small_pure)
+head(large_pure)
+```
+
+#### 2. Encoding
+
+All categorical variable need to convert to dummy variables so that each value will have the same weight
+
+```{r echo=FALSE}
+# one-hot encoding
+temp <- dummyVars(~ Item.Type, data = small_pure)
+small_encoding <- 
+  predict(temp, small_pure[1]) %>% 
+  cbind(small_pure %>% 
+          dplyr::select(-c(Item.Type)))
+temp <- NA
+
+temp <- dummyVars(~ Item.Type, data = large_pure)
+large_encoding <- 
+  predict(temp, large_pure[1]) %>% 
+  cbind(large_pure) %>% 
+  dplyr::select(-c(Item.Type))
+temp <- NA
+
+head(small_encoding)
+head(large_encoding)
+```
+
+#### 3. Standardization
+
+Values in the data set need to be centered and scales for better performance purpose
+
+```{r echo=FALSE}
+# standardized both dataset
+sm_pre <- preProcess(small_encoding, method = c("center", "scale"))
+lg_pre <- preProcess(large_encoding, method = c("center", "scale"))
+
+sm <- predict(sm_pre, small_encoding)
+lg <- predict(lg_pre, large_encoding)
+head(sm)
+head(lg)
+```
+
+# Data Splitting
+
+I use the most common splits where training data contains 75% of original records and test set contains the remaining 25%. I am going to use training data to make a model, and then use test set to test model performance at the end.
+
+```{r echo=FALSE}
+sm.split <- initial_split(sm, 0.75)
+sm.train <- training(sm.split)
+sm.test <- testing(sm.split)
+
+
+lg.split <- initial_split(lg, 0.75)
+lg.train <- training(lg.split)
+lg.test <- testing(lg.split)
+
+paste0("number of records in small training set: ", dim(sm.train)[1])
+paste0("number of records in small test set: ", dim(sm.test)[1])
+paste0("number of records in large training set: ", dim(lg.train)[1])
+paste0("number of records in large test set: ", dim(lg.test)[1])
+```
+
+# Modeling
+
+#### Linear
+
+-   Linear model is the first model comes to me when the target variable is numeric, it is the easiest and simplest model to start with.
+
+-   linear model in small data set shows *NA* in values like `Unit.Cost` and `Item.Type.Vegetables`, so I update the model by dropping these two features.
+
+-   All features after dropping looks pretty significant in modeling, the adjusted $R^2$ looks pretty good too.
+
+-   since small set and large set are in the same data structure, linear model is fitted in the large set without features aforementioned. The adjusted $R^2$ is roughly the same, but the residual error increases a bit.
+
+```{r echo=FALSE}
+sm_lm <- lm(Total.Profit ~ ., data = sm.train)
+summary(sm_lm)
+
+sm_lm <- update(sm_lm, .~. -Item.Type.Vegetables -Unit.Cost)
+summary(sm_lm)
+```
+
+```{r echo=FALSE}
+lg_lm <- lm(Total.Profit ~ . -Item.Type.Vegetables -Unit.Cost, data = lg.train)
+summary(lg_lm)
+```
+
+**Linear Diagnostic Plot**
+
+```{r echo=FALSE}
+plot(sm_lm)
+plot(lg_lm)
+```
+
+#### Simple Decision Tree
+
+-   the model is slightly different in small and large data set
+
+-   top three variable importance remain with `Total.Cost`, `Unit.Cost` and `Units.Sold`
+
+```{r echo=FALSE}
+# single decision tree
+sm_tree <- rpart(Total.Profit ~ ., 
+                 data = sm.train,
+                 )
+rpart.plot::rpart.plot(sm_tree)
+plotcp(sm_tree)
+varImp(sm_tree) %>% arrange(desc(Overall))
+```
+
+```{r echo=FALSE}
+lg_tree <- rpart(Total.Profit ~ ., 
+                 data = lg.train,
+                 )
+rpart.plot::rpart.plot(lg_tree)
+plotcp(lg_tree)
+varImp(lg_tree) %>% arrange(desc(Overall))
+```
+
+#### Bagging
+
+```{r echo=FALSE}
+# Bagging in ipred
+sm_bagging <- bagging(Total.Profit ~., 
+                      data = sm.train,
+                      coob = TRUE)
+sm_bagging
+
+
+lg_bagging <-  bagging(Total.Profit ~., 
+                      data = lg.train,
+                      coob = TRUE)
+lg_bagging
+```
+
+# Performance
+
+Use **RMSE** to check the performance of three models
+
+```{r echo=FALSE}
+# linear predicted result
+sm.linear <- predict(sm_lm, sm.test)
+lg.linear <- predict(lg_lm, lg.test)
+
+# decision tree predicted result
+sm.rpart <- predict(sm_tree, sm.test)
+lg.rpart <- predict(lg_tree, lg.test)
+
+# bagging predicted result
+sm.bag <- predict(sm_bagging, sm.test)
+lg.bag <- predict(lg_bagging, lg.test)
+
+# calculate all RMSE for each of dataset with individual model
+rmse.lm.sm <- sqrt(sum((sm.test$Total.Profit - sm.linear)^2)/nrow(sm.test))
+rmse.lm.lg <- sqrt(sum((lg.test$Total.Profit - lg.linear)^2)/nrow(lg.test))
+rmse.rpart.sm <- sqrt(sum((sm.test$Total.Profit - sm.rpart)^2)/nrow(sm.test))
+rmse.rpart.lg <- sqrt(sum((lg.test$Total.Profit - lg.rpart)^2)/nrow(lg.test))
+rmse.bag.sm <- sqrt(sum((sm.test$Total.Profit - sm.bag)^2)/nrow(sm.test))
+rmse.bag.lg <- sqrt(sum((lg.test$Total.Profit - lg.bag)^2)/nrow(lg.test))
+
+# format calculated result
+small.data <- round(c(rmse.lm.sm, rmse.rpart.sm, rmse.bag.sm),3)
+large.data <- round(c(rmse.lm.lg, rmse.rpart.lg, rmse.bag.lg),3)
+
+rbind("small data set" = small.data, 
+      "large data set" = large.data) %>% 
+  as.data.frame() %>% 
+  rename(linear = V1, decision_tree = V2, bagging = V3) 
+```
