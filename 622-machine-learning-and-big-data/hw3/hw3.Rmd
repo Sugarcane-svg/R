@@ -1,0 +1,233 @@
+---
+title: "HW3: SVM"
+Author: "Jie Zou"
+date: "`r Sys.Date()`"
+output:
+  rmdformats::downcute:
+    self_contained: true
+    default_style: "light"
+    downcute_theme: "default"
+---
+```{r setup, include=FALSE, message=FALSE}
+library(dplyr)
+library(tidyverse)
+library(purrr)
+library(rpart)  # DT
+library(caret)  # train data
+library(rsample)  # data split
+library(randomForest) # rf
+library(e1071) # svm
+library(GGally) # ggpair
+library(factoextra) # pca contribution plot
+```
+# Objectives
+
+  1. Perform an analysis of the dataset used in Homework #2 using the SVM algorithm.
+  
+  2. Compare the results with the results from previous homework.
+  
+  3. Answer questions, such as:
+  
+    i. Which algorithm is recommended to get more accurate results?
+      
+    ii. Is it better for classification or regression scenarios?
+      
+    iii. Do you agree with the recommendations?
+      
+    iv. Why?
+    
+    
+# HW Modification
+
+  In HW2, I used two different decision trees and an ensemble technique. After reviewing what I have done and I think that running PCA analysis before modeling would help to save same computation，and also help me review PCA.
+  
+  Therefore, in HW3, I am going to abandon the second decision tree model created in HW2 to make model comparison between the first decision, random forest and svm. In addition, the data that I am going to use is based on the feature selection produced by the result of PCA, so the dimension of data will be lower, and the futhur analysis will be based on feature selection.
+  
+  There is not going to be hard-coded visualization because I've done that in HW2 and I found a function can take care of it in one step. In addition, I have mentioned the potential improvement at the end of HW2 so that the hyperparameters will be tuned before modeling as we have talked in cross-validation, as a result, all models created here should be considered "optimal".
+
+# Data Exploration
+
+  The same data is loaded, the function `ggpairs` take care of the visualization in both numerical and categorical data. The downside is, if the features are a lot, it may not help to capture details since since grids are too small.
+  
+  the plot shows the relationship pairs of pairwise and individuals with target value being color coded. Take an example of the plot in the top most left, the decision boundary is very hard to be drew because the state of churn or not overlap, there is very little difference. 
+  
+  The same situation happened to some other density plots, and the points are mixed together from the scatter plots. As a result, for those who do not seem to provide significant information for prediction can be dropped from the data.
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+data <- read_csv("Bank_Customer_Churn_Prediction.csv", show_col_types = FALSE)
+
+# change the type, and remove id
+data <- 
+  data %>% 
+  select(-c(customer_id)) %>% 
+  mutate(country = as.factor(country),
+         gender = as.factor(gender),
+         credit_card = as.numeric(credit_card),
+         active_member = as.numeric(active_member),
+         churn = as.factor(churn)) 
+
+# visualization
+data %>% 
+  select(-c(churn)) %>% 
+  ggpairs(aes(color = data$churn, alpha = 0.5), legend = 1)
+```
+
+# Feature Selection
+  
+  Because PCA only work for numeric data, therefore, we need to do some one-hot encoding to categorical data, so that they can take part in PCA procedure. Also, the target variable is excluded temporarily.
+
+```{r echo=FALSE}
+paste0("dimension before one-hot encoding: (", dim(data)[1],", ", dim(data)[2],")")
+# one-hot encoding
+data.cp <- dummyVars(~country + gender, data = data)
+data <- data %>% 
+  cbind(predict(data.cp, data[2:3])) %>% 
+  select(-c(country, gender))
+
+# excluded target variable
+churn <- data %>% select(churn)
+data <- data %>% select(-c(churn))
+
+paste0("dimension after one-hot encoding: (", dim(data)[1],", ", dim(data)[2],")")
+```
+
+  From the result of PCA, we see that each of component does not contribute much total variance. So there is going to be a trade off. I would like to achieve as much variance as possible, meanwhile the eigenvalue is greater or equal to 1. As we see from PC7 and PC8, eigenvalues are near 1 but the cumulative total variance is different. So I am going to pick the total variance account for 81%.
+  
+  I select the first 8 components and plot feature contribution. The interest thing is that one of the most important features such as age results in DT1 from HW2 becomes not important. Then all features above the red dash line will be selected for modeling, and target variable is included.
+  
+```{r echo=FALSE}
+# running pca
+data.pca <- prcomp(x = data, center = T, scale. = T)
+summary(data.pca)
+```
+```{r echo=FALSE}
+# pca feature contribution plot(1-8 components)
+fviz_contrib(data.pca, choice = "var", sort.val = "desc", axes = 1:8)
+```
+```{r echo=FALSE}
+# select the feature above the dash line and add back the target variable
+d <- 
+  data %>% 
+  select(gender.Female, gender.Male, country.France, country.Spain,credit_score, country.Germany, products_number) %>% 
+  cbind(churn = churn)
+
+head(d)
+```
+
+# Preprocessing
+
+  Data is split into ratio 3:1 where training data takes up 3 parts of original data, and test set holds 1 part. The from the ratio of target variable in the first shown result, we need to deal with imbalance class which will cause unstable tree structure. I have tried upsampling in previous HW, so down-sampling is used instead. The second reason is that SVM may not work better in larger data set. the result of down-sampling is shown in the middle box. The last box is the dimension of training set.
+  
+```{r echo=FALSE}
+table(d$churn)
+set.seed(101)
+# strata makes the proportion of target variable the same as the proportion in population
+new_split <- initial_split(d, strata = churn)
+
+train.x <- training(new_split)
+train.x <- downSample(train.x[,-8], train.x$churn)
+train.y <- train.x %>% select(Class) %>% unlist()
+train.x <- train.x %>% select(-c(Class))
+
+# check class balance
+table(train.y)
+# dimension of training set
+dim(train.x)
+
+test.x <- testing(new_split) %>% select(-c(churn))
+test.y <- testing(new_split) %>% select(churn) %>% unlist()
+```
+
+
+# Model Training
+
+### DT
+```{r echo=FALSE}
+set.seed(102)
+dt.tune <- train(train.x, train.y, method = "rpart", tuneLength = 10, trControl = trainControl(method = "cv"))
+dt.tune
+rpart.plot::rpart.plot(dt.tune$finalModel)
+```
+```{r echo=FALSE}
+# DT prediction
+dt.pred <- predict(dt.tune$finalModel, test.x, type = "class")
+dt.table <- confusionMatrix(dt.pred, test.y)
+#dt.table
+```
+
+### RF
+
+```{r echo=FALSE}
+set.seed(103)
+# normally the number of tuneLength = mtry = sqrt of column number
+rf.tune <- train(train.x, train.y, method = "rf", 
+                 trControl = trainControl(method = "cv"),
+                 tuneLength = sqrt(ncol(train.x)))
+rf.tune
+varImpPlot(rf.tune$finalModel, main = "Variable Importance by RF Model")
+```
+
+```{r echo=FALSE}
+# RF predition
+rf.pred <- predict(rf.tune$finalModel, test.x)
+rf.table <- confusionMatrix(rf.pred, test.y)
+#rf.table
+```
+
+### SVM
+
+  The commonly used SVM kernels are `Linear`, `Radial` and `Polynomial`, so all three versions of SVM are tuned. Based on the accuracy of best tuned model, SVM with radial kernel is selected.
+```{r echo=FALSE}
+# SVM needs scale the data to reduce intensive computation
+svmRadial.tune <- train(train.x, train.y, method = "svmRadial", preProcess = c("center", "scale"), trControl = trainControl(method = "cv"))
+svmRadial.tune
+
+svmLinear.tune <- train(train.x, train.y, method = "svmLinear", preProcess = c("center", "scale"), trControl = trainControl(method = "cv"), tuneGrid = expand.grid(C = seq(1, 2, length = 20)))
+svmLinear.tune
+
+svmPoly.tune <- train(train.x, train.y, method = "svmPoly", preProcess = c("center", "scale"), trControl = trainControl(method = "cv"))
+svmPoly.tune
+```
+```{r echo=FALSE}
+# svmRadial prediction
+svm.pred <- predict(svmRadial.tune, test.x)
+svm.table <- confusionMatrix(svm.pred, test.y)
+#svm.table
+```
+
+
+
+# Model Performance
+
+```{r echo=FALSE}
+df <- data.frame()
+df <- df %>%
+  rbind(
+    c("DT", round(dt.table$overall[1],4), round(dt.table$byClass[1],4), round(dt.table$byClass[2],4),
+      round(dt.table$byClass[5],4), round(dt.table$byClass[6],4)),
+    c("RF", round(rf.table$overall[1],4), round(rf.table$byClass[1],4), round(rf.table$byClass[2],4),
+      round(rf.table$byClass[5],4), round(rf.table$byClass[6],4)),
+    c("svmRadial", round(svm.table$overall[1],4), round(svm.table$byClass[1],4), 
+      round(svm.table$byClass[2],4), round(svm.table$byClass[5],4), round(svm.table$byClass[6],4)))
+colnames(df) <- c("model", "accuracy", "sensitivity", "specificity","precision", "recall")
+
+df
+```
+# Discussion
+
+  i. Which algorithm is recommended to get more accurate results?
+    
+  From the table shown above, based on the accuracy score, the best model is decision tree.
+
+  ii. Is it better for classification or regression scenarios?
+    
+  There are two main types of decision trees, the most common one is classification tree, and the other is regression tree. They have different uses cases depending on varies scenarios.
+    
+  iii. Do you agree with the recommendations?
+    
+  No, I do not agree with the recommendations.
+    
+  iv. Why?
+    
+  I think that ensemble model and support vector machine should work better in general. However, random forest averages the outcome of multiple trees, the accuracy result is pretty close to the optimal one. Therefore, I would say that random forest is a more general model than desicion tree. Because the subset of data will most likely determine the shape of current decision tree, and if the given subset got changed, the accuracy of decision tree may result differently due to distinct tree structure. In addition, SVM is a linear classifier only used to do classification. Therefore, if data cannot be separated by hyper-plane(with proper kernel), SVM won't do a good job. In conclusion, it could be just by luck where the subset of data define a good tree structure.
+    
+
